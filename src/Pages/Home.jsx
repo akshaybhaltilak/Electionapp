@@ -31,7 +31,8 @@ const defaultBranding = {
 
 const Home = () => {
   const navigate = useNavigate();
-  // splash/banner removed
+  // removed transient splash/banner - showBranding and timer not needed
+  const [showBranding, setShowBranding] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [branding, setBranding] = useState(defaultBranding);
   const [workingCopy, setWorkingCopy] = useState(null);
@@ -48,6 +49,7 @@ const Home = () => {
         setLastSavedBranding(parsed);
       }
     } catch (e) {
+      // ignore invalid stored value
       console.warn('Failed to load branding from localStorage', e);
     }
   }, []);
@@ -212,7 +214,7 @@ const Home = () => {
   const active = editMode ? workingCopy || branding : branding;
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-orange-50 to-white pb-56">
+    <div className="min-h-screen bg-gradient-to-b from-orange-50 to-white">
       {/* Enhanced Header with App Info */}
       <div className="mb-6 px-4 pt-4">
         <div className="max-w-md mx-auto backdrop-blur-sm rounded-3xl shadow-lg border border-white/30 bg-white/80 flex items-center gap-4 p-4 sm:p-5">
@@ -287,11 +289,111 @@ const Home = () => {
         ))}
       </div>
 
-      {/* (political branding card moved to sticky footer) */}
+      {/* Enhanced Political Branding Section - Single Attractive Card */}
+      <div className="mt-4 bg-gradient-to-br from-orange-500 to-red-600 rounded-3xl shadow-2xl overflow-hidden max-w-md mx-auto border-4 border-white/30 transform hover:scale-[1.01] transition-all duration-300">
+        <div className="flex h-auto">
+          {/* Left Side - Politician Image (40%) */}
+          <div className="w-4/10 flex-shrink-0 relative">
+            <div className="absolute inset-0 bg-gradient-to-r from-orange-400/30 to-transparent z-10"></div>
+            <img
+              src={active.leaderImageUrl}
+              alt="Political Leader"
+              className="w-full h-full object-cover"
+              onError={(e) => {
+                e.target.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='192' viewBox='0 0 120 192'%3E%3Crect width='120' height='192' fill='%23fed7aa'/%3E%3Ccircle cx='60' cy='70' r='30' fill='%23fdba74'/%3E%3Crect x='45' y='110' width='30' height='60' fill='%23fdba74'/%3E%3C/svg%3E";
+              }}
+            />
+            {editMode && (
+              <div className="absolute top-3 right-3 z-20 p-2 bg-white/90 backdrop-blur-sm rounded-lg shadow-md">
+                <label className="text-xs text-gray-700 cursor-pointer font-medium">
+                  Change Image
+                  <input type="file" accept="image/*" className="hidden" onChange={(e) => handleImageUpload(e, 'leaderImageUrl')} />
+                </label>
+              </div>
+            )}
+          </div>
 
-    
-    
+          {/* Right Side - Content (60%) */}
+          <div className="w-6/10 p-4 flex flex-col justify-between bg-white/95">
 
+            {/* Top Section - Party Logos and Heading */}
+            <div>
+              {/* Party Alliance Logos */}
+              <div className="flex justify-center items-center mb-3">
+                <div className="flex space-x-2">
+                  {/* Main Party Logo */}
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-white p-1 shadow-sm">
+                    <img src="https://crystalpng.com/wp-content/uploads/2023/05/bjp-logo-png-1024x1024.png" alt="BJP" className="w-full h-full object-contain" />
+                  </div>
+                  {/* Alliance Partner 1 */}
+                  <div className="w-9 h-9 rounded flex items-center justify-center bg-white p-1 shadow-sm">
+                    <img src="https://images.seeklogo.com/logo-png/39/2/shiv-sena-logo-png_seeklogo-393250.png" alt="Partner" className="w-full h-full object-contain" />
+                  </div>
+                  {/* Alliance Partner 2 */}
+                  <div className="w-8 h-8 rounded flex items-center justify-center bg-white p-1 shadow-sm">
+                    <img src="https://www.clipartmax.com/png/middle/429-4291464_rashtrawadi-punha-clipart-nationalist-congress-party-rashtrawadi-congress-party-logo-png.png" alt="Partner" className="w-full h-full object-contain" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Main Heading */}
+              <h3 className="text-orange-600 font-bold text-lg mb-1 leading-tight text-center">
+                {active.leaderName}
+              </h3>
+
+              {/* Tagline */}
+              <p className="text-gray-700 text-xs mb-3 font-medium leading-tight text-center">
+                {active.leaderTagline}
+              </p>
+            </div>
+
+            {/* Middle Section - Campaign Slogan */}
+            <div className="mb-3">
+              <div className="bg-gradient-to-r from-orange-100 to-red-100 rounded-xl p-3 border border-orange-200 shadow-sm">
+                <p className="text-gray-800 text-sm font-bold text-center leading-tight">
+                  {active.slogan}
+                </p>
+                {editMode && (
+                  <div className="mt-2 text-xs text-gray-600 text-center">Slogan can be edited below</div>
+                )}
+              </div>
+            </div>
+
+            {/* Bottom Section - Call to Action */}
+            <div className="flex space-x-2">
+              <button className="flex-1 bg-gradient-to-r from-orange-500 to-red-600 text-white py-2 rounded-xl text-sm font-bold shadow-lg hover:shadow-xl transition-all duration-200 active:scale-95 text-center border border-white/30">
+                {active.cta1}
+              </button>
+              <button className="flex-1 bg-white text-orange-600 py-2 rounded-xl text-sm font-bold shadow-lg hover:shadow-xl transition-all duration-200 active:scale-95 text-center border border-orange-300">
+                {active.cta2}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Enhanced Bottom Stats Bar */}
+        <div className="bg-white/20 backdrop-blur-sm border-t border-white/30">
+          <div className="grid grid-cols-3 items-center text-center gap-2 p-3">
+            <div className="py-2">
+              <div className="text-white font-bold text-sm">{active.leaderName.split(' ')[0]}</div>
+              <div className="text-orange-200 text-xs font-medium">Candidate</div>
+            </div>
+            <div className="py-2 border-x border-white/20">
+              <div className="text-white font-bold text-sm">{active.serialNumber}</div>
+              <div className="text-orange-200 text-xs font-medium">Serial No.</div>
+            </div>
+            <div className="py-2">
+              <div className="mx-auto w-10 h-10 rounded-full overflow-hidden bg-white/20 flex items-center justify-center border-2 border-white/30">
+                <img src={active.signImageUrl} alt="sign" className="w-8 h-8 object-contain" />
+              </div>
+              <div className="text-orange-200 text-xs font-medium mt-1">Signature</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Call to Action */}
+      
       {/* Edit Panel: show when editMode=true */}
       {editMode && (
         <div className="mt-8 max-w-xl mx-auto bg-white rounded-2xl shadow-lg p-6 border border-orange-100">
