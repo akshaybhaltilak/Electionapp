@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { db, ref, get } from '../Firebase/config';
+import { db, ref, get, storage } from '../Firebase/config';
+import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 
@@ -9,9 +10,7 @@ import {
   FiArrowLeft,
   FiShare2,
   FiDownload,
-  FiFileText,
   FiPrinter,
-  FiImage,
   FiMessageCircle,
   FiMail,
   FiPhone,
@@ -20,11 +19,17 @@ import {
   FiHash,
   FiCalendar,
   FiStar,
+  FiHome,
+  FiFlag,
+  FiPhoneCall,
+  FiEdit,
+  FiSave,
+  FiX,
+  FiCamera
 } from 'react-icons/fi';
-import { FaWhatsapp, FaRegFilePdf, FaShareAlt } from 'react-icons/fa';
+import { FaWhatsapp, FaRegFilePdf, FaIndianRupeeSign } from 'react-icons/fa6';
 import { GiVote } from 'react-icons/gi';
 import TranslatedText from './TranslatedText';
-import { MarsIcon, VenusIcon } from 'lucide-react';
 
 const FullVoterDetails = () => {
   const { voterId } = useParams();
@@ -33,16 +38,34 @@ const FullVoterDetails = () => {
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
   const [showShareOptions, setShowShareOptions] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [imageUploading, setImageUploading] = useState(false);
+  const [selectedImage, setSelectedImage] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
 
-  // Sample political data - replace with your actual data
-  const politicalInfo = {
-    candidateName: "Rajesh Kumar",
-    partyName: "Bharatiya Janata Party",
-    partySymbol: "Lotus",
-    slogan: "Development for All",
-    contact: "+91-9876543210",
-    website: "www.rajeshkumar.com"
-  };
+  // Editable political data with localStorage persistence
+  const [politicalInfo, setPoliticalInfo] = useState(() => {
+    const saved = localStorage.getItem('localCandidateInfo');
+    return saved ? JSON.parse(saved) : {
+      candidateName: "Rajesh Kumar",
+      partyName: "Bharatiya Janata Party",
+      partySymbol: "Lotus",
+      slogan: "Development for All",
+      contact: "+91-9876543210",
+      website: "www.rajeshkumar.com",
+      achievements: [
+        "Built 5 new schools in constituency",
+        "Improved road infrastructure",
+        "Healthcare initiatives"
+      ],
+      candidateImage: null
+    };
+  });
+
+  // Save to localStorage whenever politicalInfo changes
+  useEffect(() => {
+    localStorage.setItem('localCandidateInfo', JSON.stringify(politicalInfo));
+  }, [politicalInfo]);
 
   useEffect(() => {
     loadVoterDetails();
@@ -63,61 +86,150 @@ const FullVoterDetails = () => {
     }
   };
 
-  const generateWhatsAppMessage = () => {
-    const baseMessage = `🗳️ *Voter Information* 🗳️\n\n` +
-      `👤 *Name:* ${voter.name}\n` +
-      `🆔 *Voter ID:* ${voter.voterId}\n` +
-      `🏛️ *Booth:* ${voter.boothNumber}\n` +
-      `📍 *Address:* ${voter.pollingStationAddress}\n` +
-      `${voter.age ? `🎂 *Age:* ${voter.age}\n` : ''}` +
-      `${voter.gender ? `⚧️ *Gender:* ${voter.gender}\n` : ''}` +
-      `\n━━━━━━━━━━━━━━━━━━━━\n\n` +
-      `*Your Local Candidate* 👇\n\n` +
-      `🎯 *Candidate:* ${politicalInfo.candidateName}\n` +
-      `🏛️ *Party:* ${politicalInfo.partyName}\n` +
-      `🌺 *Symbol:* ${politicalInfo.partySymbol}\n` +
-      `📢 *Slogan:* ${politicalInfo.slogan}\n` +
-      `📞 *Contact:* ${politicalInfo.contact}\n` +
-      `🌐 *Website:* ${politicalInfo.website}\n\n` +
-      `*Remember to vote on election day!* ✅\n` +
-      `*Your vote matters!* 💪`;
+  const handleInputChange = (field, value) => {
+    setPoliticalInfo(prev => ({
+      ...prev,
+      [field]: value
+    }));
+  };
 
-    return baseMessage;
+  const handleAchievementChange = (index, value) => {
+    const newAchievements = [...politicalInfo.achievements];
+    newAchievements[index] = value;
+    setPoliticalInfo(prev => ({
+      ...prev,
+      achievements: newAchievements
+    }));
+  };
+
+  const addAchievement = () => {
+    setPoliticalInfo(prev => ({
+      ...prev,
+      achievements: [...prev.achievements, "New achievement"]
+    }));
+  };
+
+  const removeAchievement = (index) => {
+    setPoliticalInfo(prev => ({
+      ...prev,
+      achievements: prev.achievements.filter((_, i) => i !== index)
+    }));
+  };
+
+  const handleImageUpload = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file');
+      return;
+    }
+
+    // Validate file size (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Please select an image smaller than 5MB');
+      return;
+    }
+
+    setImageUploading(true);
+    setSelectedImage(file);
+
+    // Create preview
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setImagePreview(e.target.result);
+    };
+    reader.readAsDataURL(file);
+
+    try {
+      // Upload to Firebase Storage
+      const imageRef = storageRef(storage, `candidate-images/${Date.now()}-${file.name}`);
+      const snapshot = await uploadBytes(imageRef, file);
+      const downloadURL = await getDownloadURL(snapshot.ref);
+      
+      setPoliticalInfo(prev => ({
+        ...prev,
+        candidateImage: downloadURL
+      }));
+    } catch (error) {
+      console.error('Error uploading image:', error);
+      alert('Error uploading image. Please try again.');
+    } finally {
+      setImageUploading(false);
+    }
+  };
+
+  const generateWhatsAppMessage = () => {
+    const message = `🗳️ *VOTER INFORMATION RECEIPT* 🗳️
+━━━━━━━━━━━━━━━━━━━━
+
+👤 *VOTER DETAILS*
+• Name: ${voter.name}
+• Voter ID: ${voter.voterId}
+• Booth: ${voter.boothNumber}
+• Address: ${voter.pollingStationAddress}
+${voter.age ? `• Age: ${voter.age} years\n` : ''}${voter.gender ? `• Gender: ${voter.gender}\n` : ''}
+
+📍 *POLLING INFORMATION*
+• Booth: ${voter.boothNumber}
+• Station: ${voter.pollingStationAddress}
+
+🎯 *YOUR CANDIDATE*
+• Candidate: ${politicalInfo.candidateName}
+• Party: ${politicalInfo.partyName}
+• Symbol: ${politicalInfo.partySymbol}
+• Slogan: ${politicalInfo.slogan}
+• Contact: ${politicalInfo.contact}
+
+📞 *QUICK ACTIONS*
+• Call Candidate: ${politicalInfo.contact}
+• Visit: ${politicalInfo.website}
+
+💡 *Remember to vote! Your voice matters!*
+✅ Verified by VoterData Pro`;
+
+    return message;
   };
 
   const shareOnWhatsApp = () => {
     const message = generateWhatsAppMessage();
     const url = `https://wa.me/?text=${encodeURIComponent(message)}`;
     window.open(url, '_blank');
+    setShowShareOptions(false);
   };
 
   const shareViaSMS = () => {
-    const message = `Voter Details:\nName: ${voter.name}\nVoter ID: ${voter.voterId}\nBooth: ${voter.boothNumber}\nAddress: ${voter.pollingStationAddress}${voter.age ? `\nAge: ${voter.age}` : ''}${voter.gender ? `\nGender: ${voter.gender}` : ''}\n\nCandidate: ${politicalInfo.candidateName}\nParty: ${politicalInfo.partyName}`;
+    const message = `Voter Details:\nName: ${voter.name}\nVoter ID: ${voter.voterId}\nBooth: ${voter.boothNumber}\nAddress: ${voter.pollingStationAddress}${voter.age ? `\nAge: ${voter.age}` : ''}${voter.gender ? `\nGender: ${voter.gender}` : ''}\n\nCandidate: ${politicalInfo.candidateName}\nParty: ${politicalInfo.partyName}\nContact: ${politicalInfo.contact}`;
     const url = `sms:?body=${encodeURIComponent(message)}`;
     window.open(url, '_blank');
+    setShowShareOptions(false);
   };
 
   const shareViaEmail = () => {
     const subject = `Voter Details - ${voter.name}`;
-    const body = `Voter Details:\n\nName: ${voter.name}\nVoter ID: ${voter.voterId}\nBooth Number: ${voter.boothNumber}\nPolling Station Address: ${voter.pollingStationAddress}${voter.age ? `\nAge: ${voter.age}` : ''}${voter.gender ? `\nGender: ${voter.gender}` : ''}${voter.serialNumber ? `\nSerial Number: ${voter.serialNumber}` : ''}\n\nCandidate Information:\nName: ${politicalInfo.candidateName}\nParty: ${politicalInfo.partyName}\nSymbol: ${politicalInfo.partySymbol}\nContact: ${politicalInfo.contact}`;
+    const body = `VOTER INFORMATION RECEIPT\n\nVOTER DETAILS:\nName: ${voter.name}\nVoter ID: ${voter.voterId}\nBooth Number: ${voter.boothNumber}\nPolling Station: ${voter.pollingStationAddress}${voter.age ? `\nAge: ${voter.age}` : ''}${voter.gender ? `\nGender: ${voter.gender}` : ''}\n\nCANDIDATE INFORMATION:\nName: ${politicalInfo.candidateName}\nParty: ${politicalInfo.partyName}\nSymbol: ${politicalInfo.partySymbol}\nContact: ${politicalInfo.contact}\nWebsite: ${politicalInfo.website}\n\nThank you for using VoterData Pro!`;
     const url = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     window.open(url, '_blank');
+    setShowShareOptions(false);
   };
 
   const downloadAsImage = async () => {
     setDownloading(true);
     try {
-      const element = document.getElementById('voter-details-card');
+      const element = document.getElementById('voter-receipt');
       const canvas = await html2canvas(element, {
-        scale: 2,
+        scale: 3,
         backgroundColor: '#ffffff',
         useCORS: true,
-        logging: false
+        logging: false,
+        width: element.scrollWidth,
+        height: element.scrollHeight
       });
       const image = canvas.toDataURL('image/png', 1.0);
       
       const link = document.createElement('a');
-      link.download = `voter-${voter.voterId}-${Date.now()}.png`;
+      link.download = `voter-receipt-${voter.voterId}.png`;
       link.href = image;
       link.click();
     } catch (error) {
@@ -130,21 +242,20 @@ const FullVoterDetails = () => {
   const downloadAsPDF = async () => {
     setDownloading(true);
     try {
-      const element = document.getElementById('voter-details-card');
+      const element = document.getElementById('voter-receipt');
       const canvas = await html2canvas(element, {
-        scale: 2,
+        scale: 3,
         backgroundColor: '#ffffff',
         useCORS: true,
         logging: false
       });
-      const imgData = canvas.toDataURL('image/png');
+      
+      const imgWidth = 210; // A4 width in mm
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
       
       const pdf = new jsPDF('p', 'mm', 'a4');
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-      
-      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-      pdf.save(`voter-${voter.voterId}-${Date.now()}.pdf`);
+      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, imgWidth, imgHeight);
+      pdf.save(`voter-receipt-${voter.voterId}.pdf`);
     } catch (error) {
       console.error('Error downloading PDF:', error);
     } finally {
@@ -153,16 +264,42 @@ const FullVoterDetails = () => {
   };
 
   const printVoterDetails = () => {
-    const printContent = document.getElementById('voter-details-card').innerHTML;
+    const printContent = document.getElementById('voter-receipt').innerHTML;
     const originalContent = document.body.innerHTML;
     
     document.body.innerHTML = `
-      <div style="padding: 20px; font-family: Arial, sans-serif;">
-        ${printContent}
-        <div style="text-align: center; margin-top: 20px; color: #666; font-size: 12px;">
-          Printed from VoterData Pro - ${new Date().toLocaleDateString()}
-        </div>
-      </div>
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Voter Receipt - ${voter.name}</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            @media print {
+              body { 
+                font-family: 'Arial', sans-serif; 
+                margin: 0; 
+                padding: 10px;
+                background: white;
+                font-size: 12px;
+              }
+              .print-container {
+                max-width: 100%;
+                margin: 0 auto;
+              }
+              .no-print { display: none !important; }
+              .print-break { page-break-inside: avoid; }
+            }
+            @media screen {
+              body { display: none; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="print-container">
+            ${printContent}
+          </div>
+        </body>
+      </html>
     `;
     
     window.print();
@@ -172,13 +309,13 @@ const FullVoterDetails = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-100 flex items-center justify-center p-4">
         <div className="text-center">
-          <div className="relative inline-block">
-            <div className="w-16 h-16 border-4 border-blue-200 rounded-full animate-spin"></div>
-            <div className="w-16 h-16 border-4 border-transparent border-t-blue-600 rounded-full absolute top-0 left-0 animate-spin"></div>
+          <div className="relative inline-block mb-4">
+            <div className="w-16 h-16 border-4 border-orange-200 rounded-full animate-spin"></div>
+            <div className="w-16 h-16 border-4 border-transparent border-t-orange-600 rounded-full absolute top-0 left-0 animate-spin"></div>
           </div>
-          <div className="text-blue-600 text-lg font-semibold mt-4">
+          <div className="text-orange-700 text-lg font-semibold">
             <TranslatedText>Loading voter details...</TranslatedText>
           </div>
         </div>
@@ -188,8 +325,8 @@ const FullVoterDetails = () => {
 
   if (!voter) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
-        <div className="text-center bg-white rounded-2xl p-8 shadow-xl border border-blue-100 max-w-md w-full">
+      <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-100 flex items-center justify-center p-4">
+        <div className="text-center bg-white rounded-2xl p-8 shadow-xl border border-orange-200 max-w-md w-full">
           <div className="text-6xl mb-4">😕</div>
           <h2 className="text-2xl font-bold text-gray-800 mb-2">
             <TranslatedText>Voter Not Found</TranslatedText>
@@ -199,7 +336,7 @@ const FullVoterDetails = () => {
           </p>
           <button
             onClick={() => navigate('/')}
-            className="bg-blue-600 text-white px-6 py-3 rounded-xl font-semibold hover:bg-blue-700 transition-all duration-200 shadow-lg hover:shadow-xl"
+            className="bg-orange-600 text-white px-6 py-3 rounded-xl font-semibold hover:bg-orange-700 transition-all duration-200 shadow-lg hover:shadow-xl"
           >
             <TranslatedText>Back to Dashboard</TranslatedText>
           </button>
@@ -209,57 +346,70 @@ const FullVoterDetails = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-      <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-8">
-          <button
-            onClick={() => navigate(-1)}
-            className="flex items-center gap-2 bg-white text-blue-600 hover:text-blue-700 font-semibold px-4 py-3 rounded-xl shadow-lg border border-blue-100 hover:shadow-xl transition-all duration-200"
-          >
-            <FiArrowLeft className="text-lg" />
-            <TranslatedText>Back</TranslatedText>
-          </button>
-          
-          <div className="text-center">
-            <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
-              <GiVote className="text-blue-600" />
-              <TranslatedText>Voter Profile</TranslatedText>
-            </h1>
-            <p className="text-gray-600 text-sm">Complete voter information</p>
-          </div>
+    <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-100 p-4 pb-24">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <button
+          onClick={() => navigate(-1)}
+          className="flex items-center gap-2 bg-white text-orange-600 hover:text-orange-700 font-semibold px-4 py-3 rounded-xl shadow-lg border border-orange-200 hover:shadow-xl transition-all duration-200"
+        >
+          <FiArrowLeft className="text-lg" />
+          <span className="hidden sm:inline"><TranslatedText>Back</TranslatedText></span>
+        </button>
+        
+        <div className="text-center">
+          <h1 className="text-xl font-bold text-gray-800 flex items-center gap-2 justify-center">
+            <GiVote className="text-orange-600" />
+            <TranslatedText>Voter Receipt</TranslatedText>
+          </h1>
+        </div>
 
+        <div className="flex items-center gap-2">
+          {/* Edit Toggle Button */}
+          <button
+            onClick={() => setEditing(!editing)}
+            className={`flex items-center gap-2 font-semibold px-4 py-3 rounded-xl shadow-lg transition-all duration-200 ${
+              editing 
+                ? 'bg-green-600 text-white hover:bg-green-700' 
+                : 'bg-white text-orange-600 hover:text-orange-700 border border-orange-200'
+            }`}
+          >
+            {editing ? <FiSave className="text-lg" /> : <FiEdit className="text-lg" />}
+            <span className="hidden sm:inline">{editing ? 'Save' : 'Edit'}</span>
+          </button>
+
+          {/* Share Button */}
           <div className="relative">
             <button
               onClick={() => setShowShareOptions(!showShareOptions)}
-              className="flex items-center gap-2 bg-blue-600 text-white font-semibold px-4 py-3 rounded-xl shadow-lg hover:bg-blue-700 transition-all duration-200"
+              className="flex items-center gap-2 bg-orange-600 text-white font-semibold px-4 py-3 rounded-xl shadow-lg hover:bg-orange-700 transition-all duration-200"
             >
-              <FaShareAlt />
-              <TranslatedText>Share</TranslatedText>
+              <FiShare2 />
+              <span className="hidden sm:inline"><TranslatedText>Share</TranslatedText></span>
             </button>
             
             {showShareOptions && (
-              <div className="absolute top-full right-0 mt-2 bg-white rounded-xl shadow-2xl border border-gray-200 p-4 z-10 min-w-[200px]">
+              <div className="absolute top-full right-0 mt-2 bg-white rounded-xl shadow-2xl border border-gray-200 p-3 z-50 min-w-[180px]">
                 <div className="space-y-2">
                   <button
                     onClick={shareOnWhatsApp}
-                    className="flex items-center gap-3 w-full text-left p-3 rounded-lg hover:bg-green-50 transition-colors"
+                    className="flex items-center gap-3 w-full text-left p-3 rounded-lg hover:bg-green-50 transition-colors text-sm"
                   >
-                    <FaWhatsapp className="text-green-500 text-xl" />
+                    <FaWhatsapp className="text-green-500 text-lg" />
                     <span>WhatsApp</span>
                   </button>
                   <button
                     onClick={shareViaSMS}
-                    className="flex items-center gap-3 w-full text-left p-3 rounded-lg hover:bg-blue-50 transition-colors"
+                    className="flex items-center gap-3 w-full text-left p-3 rounded-lg hover:bg-blue-50 transition-colors text-sm"
                   >
-                    <FiMessageCircle className="text-blue-500 text-xl" />
+                    <FiMessageCircle className="text-blue-500 text-lg" />
                     <span>Text SMS</span>
                   </button>
                   <button
                     onClick={shareViaEmail}
-                    className="flex items-center gap-3 w-full text-left p-3 rounded-lg hover:bg-purple-50 transition-colors"
+                    className="flex items-center gap-3 w-full text-left p-3 rounded-lg hover:bg-purple-50 transition-colors text-sm"
                   >
-                    <FiMail className="text-purple-500 text-xl" />
+                    <FiMail className="text-purple-500 text-lg" />
                     <span>Email</span>
                   </button>
                 </div>
@@ -267,130 +417,223 @@ const FullVoterDetails = () => {
             )}
           </div>
         </div>
+      </div>
 
-        {/* Main Voter Card */}
-        <div id="voter-details-card" className="bg-white rounded-2xl shadow-2xl border border-blue-100 overflow-hidden mb-8">
-          {/* Header Banner */}
-          <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-2xl font-bold">{voter.name}</h2>
-                <p className="text-blue-100">Voter ID: {voter.voterId}</p>
-              </div>
-              <div className="bg-white/20 p-3 rounded-xl">
-                <GiVote className="text-3xl" />
-              </div>
-            </div>
+      {/* Voter Receipt Card */}
+      <div id="voter-receipt" className="bg-white rounded-2xl shadow-2xl border border-orange-200 overflow-hidden mb-6 max-w-2xl mx-auto print:shadow-none print:border-2">
+        {/* Receipt Header */}
+        <div className="bg-gradient-to-r from-orange-500 to-amber-500 text-white p-5 text-center">
+          <div className="flex items-center justify-center gap-3 mb-2">
+            <GiVote className="text-2xl" />
+            <h2 className="text-xl font-bold">VOTER INFORMATION RECEIPT</h2>
           </div>
-
-          <div className="p-6">
-            {/* Personal Information */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-              <div className="space-y-4">
-                <h3 className="text-lg font-semibold text-gray-800 flex items-center gap-2 mb-4">
-                  <FiUser className="text-blue-500" />
-                  Personal Information
-                </h3>
-                
-                <InfoCard
-                  icon={FiHash}
-                  label="Serial Number"
-                  value={voter.serialNumber || 'N/A'}
-                  color="blue"
-                />
-                <InfoCard
-                  icon={FiFileText}
-                  label="Voter ID"
-                  value={voter.voterId}
-                  color="green"
-                />
-                {voter.age && (
-                  <InfoCard
-                    icon={FiCalendar}
-                    label="Age"
-                    value={voter.age}
-                    color="purple"
-                  />
-                )}
-                {voter.gender && (
-                  <InfoCard
-                    icon={voter.gender === 'Male' ? MarsIcon : VenusIcon}
-                    label="Gender"
-                    value={voter.gender}
-                    color="pink"
-                  />
-                )}
-              </div>
-
-              <div className="space-y-4">
-                <h3 className="text-lg font-semibold text-gray-800 flex items-center gap-2 mb-4">
-                  <FiMapPin className="text-red-500" />
-                  Location Details
-                </h3>
-                
-                <InfoCard
-                  icon={FiMapPin}
-                  label="Booth Number"
-                  value={voter.boothNumber}
-                  color="red"
-                />
-                <InfoCard
-                  icon={FiMapPin}
-                  label="Polling Station"
-                  value={voter.pollingStationAddress}
-                  color="indigo"
-                  fullWidth
-                />
-              </div>
-            </div>
-
-            {/* Political Information Flyer */}
-            <div className="bg-gradient-to-r from-orange-50 to-amber-50 rounded-xl p-6 border border-orange-200 mb-6">
-              <h3 className="text-lg font-semibold text-orange-800 mb-4 flex items-center gap-2">
-                <FiStar className="text-orange-600" />
-                Your Local Candidate
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-orange-700 font-medium">Candidate:</span>
-                      <span className="text-orange-900 font-semibold">{politicalInfo.candidateName}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-orange-700 font-medium">Party:</span>
-                      <span className="text-orange-900 font-semibold">{politicalInfo.partyName}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-orange-700 font-medium">Symbol:</span>
-                      <span className="text-orange-900 font-semibold">{politicalInfo.partySymbol}</span>
-                    </div>
-                  </div>
-                </div>
-                <div>
-                  <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-orange-700 font-medium">Slogan:</span>
-                      <span className="text-orange-900 font-semibold">{politicalInfo.slogan}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-orange-700 font-medium">Contact:</span>
-                      <span className="text-orange-900 font-semibold">{politicalInfo.contact}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+          <p className="text-orange-100 text-sm">Official Voter Data Record</p>
         </div>
 
-        {/* Action Buttons */}
-        <div className="bg-white rounded-2xl shadow-xl border border-blue-100 p-6">
-          <h3 className="text-xl font-bold text-gray-800 text-center mb-6">
-            <TranslatedText>Export & Share Options</TranslatedText>
-          </h3>
-          
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+        {/* Receipt Body */}
+        <div className="p-5">
+          {/* Voter Main Info */}
+          <div className="text-center mb-6 border-b border-gray-200 pb-4">
+            <h3 className="text-2xl font-bold text-gray-800 mb-2">{voter.name}</h3>
+            <div className="bg-orange-100 text-orange-700 px-3 py-1 rounded-full text-sm font-medium inline-flex items-center gap-2">
+              <FiHash className="text-xs" />
+              Voter ID: {voter.voterId}
+            </div>
+          </div>
+
+          {/* Personal Details Section */}
+          <div className="mb-6">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-1 h-6 bg-orange-500 rounded-full"></div>
+              <h4 className="text-lg font-semibold text-gray-800">Personal Details</h4>
+            </div>
+            <div className="space-y-3">
+              <DetailRow icon={FiUser} label="Full Name" value={voter.name} />
+              <DetailRow icon={FiHash} label="Voter ID" value={voter.voterId} />
+              {voter.age && <DetailRow icon={FiCalendar} label="Age" value={`${voter.age} years`} />}
+              {voter.gender && <DetailRow icon={FiUser} label="Gender" value={voter.gender} />}
+            </div>
+          </div>
+
+          {/* Voting Details Section */}
+          <div className="mb-6">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-1 h-6 bg-blue-500 rounded-full"></div>
+              <h4 className="text-lg font-semibold text-gray-800">Voting Details</h4>
+            </div>
+            <div className="space-y-3">
+              <DetailRow icon={FiHome} label="Booth Number" value={voter.boothNumber} />
+              <DetailRow icon={FiMapPin} label="Polling Station" value={voter.pollingStationAddress} fullWidth />
+            </div>
+          </div>
+
+          {/* Political Flyer Section */}
+          <div className="bg-gradient-to-br from-orange-50 to-amber-50 rounded-xl p-4 border-2 border-orange-300 mb-4">
+            <div className="text-center mb-3">
+              <div className="flex items-center justify-center gap-2 mb-2">
+                <FiStar className="text-orange-500" />
+                <h4 className="text-lg font-bold text-orange-800">Your Local Candidate</h4>
+                <FiStar className="text-orange-500" />
+              </div>
+              <div className="w-20 h-1 bg-orange-400 mx-auto rounded-full"></div>
+            </div>
+
+            {/* Candidate Image Upload */}
+            <div className="text-center mb-4">
+              <div className="flex flex-col items-center gap-3">
+                {(politicalInfo.candidateImage || imagePreview) && (
+                  <div className="relative">
+                    <img 
+                      src={politicalInfo.candidateImage || imagePreview} 
+                      alt="Candidate" 
+                      className="w-24 h-24 rounded-full object-cover border-4 border-orange-300 shadow-lg"
+                    />
+                    {editing && (
+                      <button
+                        onClick={() => {
+                          setPoliticalInfo(prev => ({ ...prev, candidateImage: null }));
+                          setImagePreview(null);
+                          setSelectedImage(null);
+                        }}
+                        className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-lg hover:bg-red-600 transition-colors"
+                      >
+                        <FiX size={14} />
+                      </button>
+                    )}
+                  </div>
+                )}
+                
+                {editing && (
+                  <div className="flex flex-col items-center gap-2">
+                    <label className="flex items-center gap-2 bg-orange-500 text-white px-4 py-2 rounded-lg cursor-pointer hover:bg-orange-600 transition-colors text-sm">
+                      <FiCamera />
+                      {imageUploading ? 'Uploading...' : (politicalInfo.candidateImage ? 'Change Image' : 'Add Image')}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleImageUpload}
+                        className="hidden"
+                        disabled={imageUploading}
+                      />
+                    </label>
+                    {imageUploading && (
+                      <div className="text-orange-600 text-sm flex items-center gap-2">
+                        <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-orange-600"></div>
+                        Uploading...
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            <div className="space-y-3">
+              <EditableRow 
+                editing={editing}
+                label="Candidate" 
+                value={politicalInfo.candidateName}
+                onChange={(value) => handleInputChange('candidateName', value)}
+                highlight 
+              />
+              <EditableRow 
+                editing={editing}
+                label="Party" 
+                value={politicalInfo.partyName}
+                onChange={(value) => handleInputChange('partyName', value)}
+              />
+              <EditableRow 
+                editing={editing}
+                label="Symbol" 
+                value={politicalInfo.partySymbol}
+                onChange={(value) => handleInputChange('partySymbol', value)}
+              />
+              <EditableRow 
+                editing={editing}
+                label="Slogan" 
+                value={politicalInfo.slogan}
+                onChange={(value) => handleInputChange('slogan', value)}
+              />
+              <EditableRow 
+                editing={editing}
+                label="Contact" 
+                value={politicalInfo.contact}
+                onChange={(value) => handleInputChange('contact', value)}
+              />
+              <EditableRow 
+                editing={editing}
+                label="Website" 
+                value={politicalInfo.website}
+                onChange={(value) => handleInputChange('website', value)}
+              />
+            </div>
+
+            {/* Achievements */}
+            <div className="mt-4 pt-3 border-t border-orange-200">
+              <div className="flex justify-between items-center mb-2">
+                <h5 className="text-sm font-semibold text-orange-700">Key Achievements:</h5>
+                {editing && (
+                  <button
+                    onClick={addAchievement}
+                    className="text-xs bg-green-500 text-white px-2 py-1 rounded hover:bg-green-600 transition-colors"
+                  >
+                    Add +
+                  </button>
+                )}
+              </div>
+              <div className="space-y-1">
+                {politicalInfo.achievements.map((achievement, index) => (
+                  <div key={index} className="flex items-start gap-2 text-xs text-orange-600">
+                    {editing ? (
+                      <div className="flex items-center gap-2 w-full">
+                        <input
+                          type="text"
+                          value={achievement}
+                          onChange={(e) => handleAchievementChange(index, e.target.value)}
+                          className="flex-1 px-2 py-1 border border-orange-300 rounded text-orange-700 text-xs"
+                          placeholder="Enter achievement"
+                        />
+                        <button
+                          onClick={() => removeAchievement(index)}
+                          className="text-red-500 hover:text-red-700 p-1"
+                        >
+                          <FiX size={12} />
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <span className="text-orange-500 mt-0.5">•</span>
+                        <span>{achievement}</span>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Receipt Footer */}
+          <div className="text-center border-t border-gray-200 pt-4">
+            <div className="flex items-center justify-center gap-2 text-sm text-gray-500 mb-2">
+              <GiVote className="text-orange-500" />
+              <span>Generated by VoterData Pro</span>
+            </div>
+            <p className="text-xs text-gray-400">
+              {new Date().toLocaleDateString('en-IN', { 
+                day: '2-digit', 
+                month: 'short', 
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+              })}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Action Buttons - Mobile Optimized */}
+      <div className="fixed bottom-4 left-4 right-4 z-40">
+        <div className="bg-white/95 backdrop-blur-xl rounded-2xl p-4 shadow-2xl border border-orange-200">
+          <div className="grid grid-cols-5 gap-2">
             <ActionButton
               icon={FaWhatsapp}
               label="WhatsApp"
@@ -404,22 +647,10 @@ const FullVoterDetails = () => {
               onClick={shareViaSMS}
             />
             <ActionButton
-              icon={FiMail}
-              label="Email"
-              color="bg-purple-500 hover:bg-purple-600"
-              onClick={shareViaEmail}
-            />
-            <ActionButton
-              icon={FiImage}
+              icon={FiDownload}
               label="Image"
-              color="bg-indigo-500 hover:bg-indigo-600"
+              color="bg-purple-500 hover:bg-purple-600"
               onClick={downloadAsImage}
-            />
-            <ActionButton
-              icon={FiPrinter}
-              label="Print"
-              color="bg-gray-600 hover:bg-gray-700"
-              onClick={printVoterDetails}
             />
             <ActionButton
               icon={FaRegFilePdf}
@@ -427,15 +658,19 @@ const FullVoterDetails = () => {
               color="bg-red-500 hover:bg-red-600"
               onClick={downloadAsPDF}
             />
+            <ActionButton
+              icon={FiPrinter}
+              label="Print"
+              color="bg-indigo-500 hover:bg-indigo-600"
+              onClick={printVoterDetails}
+            />
           </div>
 
           {downloading && (
-            <div className="text-center mt-6">
-              <div className="inline-flex items-center gap-3 bg-blue-100 text-blue-700 px-4 py-2 rounded-xl">
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
-                <span className="text-sm font-medium">
-                  <TranslatedText>Preparing download...</TranslatedText>
-                </span>
+            <div className="text-center mt-3">
+              <div className="inline-flex items-center gap-2 bg-orange-100 text-orange-700 px-3 py-2 rounded-xl text-sm">
+                <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-orange-600"></div>
+                <span>Preparing download...</span>
               </div>
             </div>
           )}
@@ -445,43 +680,59 @@ const FullVoterDetails = () => {
   );
 };
 
-const InfoCard = ({ icon: Icon, label, value, color = "blue", fullWidth = false }) => {
-  const colorClasses = {
-    blue: 'bg-blue-100 text-blue-600',
-    green: 'bg-green-100 text-green-600',
-    purple: 'bg-purple-100 text-purple-600',
-    red: 'bg-red-100 text-red-600',
-    indigo: 'bg-indigo-100 text-indigo-600',
-    pink: 'bg-pink-100 text-pink-600'
-  };
-
-  return (
-    <div className={`bg-gray-50 rounded-xl p-4 border border-gray-200 ${fullWidth ? 'col-span-2' : ''}`}>
-      <div className="flex items-center gap-3 mb-2">
-        <div className={`p-2 rounded-lg ${colorClasses[color]}`}>
-          <Icon className="text-lg" />
-        </div>
-        <div className="text-sm font-semibold text-gray-700">
-          <TranslatedText>{label}</TranslatedText>
-        </div>
-      </div>
-      <div className="text-gray-800 font-medium pl-11">
-        {value}
-      </div>
+const DetailRow = ({ icon: Icon, label, value, fullWidth = false }) => (
+  <div className={`flex items-start gap-3 ${fullWidth ? 'col-span-2' : ''}`}>
+    <div className="bg-orange-100 p-2 rounded-lg flex-shrink-0 mt-0.5">
+      <Icon className="text-orange-600 text-sm" />
     </div>
-  );
-};
+    <div className="flex-1 min-w-0">
+      <div className="text-sm text-gray-600 font-medium mb-1">{label}</div>
+      <div className="text-gray-800 font-semibold text-base leading-tight break-words">{value}</div>
+    </div>
+  </div>
+);
+
+const EditableRow = ({ editing, label, value, onChange, highlight = false }) => (
+  <div className="flex justify-between items-center py-1">
+    <span className={`text-sm font-medium ${highlight ? 'text-orange-700 font-bold' : 'text-orange-600'}`}>
+      {label}:
+    </span>
+    {editing ? (
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={`text-sm font-semibold px-2 py-1 border border-orange-300 rounded ${
+          highlight ? 'text-orange-800 text-base' : 'text-orange-700'
+        } bg-white`}
+      />
+    ) : (
+      <span className={`text-sm font-semibold ${highlight ? 'text-orange-800 text-base' : 'text-orange-700'}`}>
+        {value}
+      </span>
+    )}
+  </div>
+);
+
+const FlyerRow = ({ label, value, highlight = false }) => (
+  <div className="flex justify-between items-center py-1">
+    <span className={`text-sm font-medium ${highlight ? 'text-orange-700 font-bold' : 'text-orange-600'}`}>
+      {label}:
+    </span>
+    <span className={`text-sm font-semibold ${highlight ? 'text-orange-800 text-base' : 'text-orange-700'}`}>
+      {value}
+    </span>
+  </div>
+);
 
 const ActionButton = ({ icon: Icon, label, color, onClick, disabled }) => (
   <button
     onClick={onClick}
     disabled={disabled}
-    className={`${color} text-white py-3 px-3 rounded-xl font-semibold transition-all duration-200 hover:shadow-lg active:scale-95 flex flex-col items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed`}
+    className={`${color} text-white py-3 px-2 rounded-xl font-semibold transition-all duration-200 hover:shadow-lg active:scale-95 flex flex-col items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed text-xs`}
   >
-    <Icon className="text-xl" />
-    <span className="text-xs text-center">
-      <TranslatedText>{label}</TranslatedText>
-    </span>
+    <Icon className="text-lg" />
+    <span className="text-xs text-center leading-tight">{label}</span>
   </button>
 );
 

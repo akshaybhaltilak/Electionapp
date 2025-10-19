@@ -63,7 +63,7 @@ const VoterRow = memo(({ data, index, style }) => {
             <div className="flex-1 min-w-0">
               {/* Name and Voter ID */}
               <div className="flex items-center gap-2 mb-1">
-                <h3 className="text-sm font-semibold text-gray-900 truncate">
+                <h3 className="text-sm font-semibold text-gray-900 break-words">
                   {voter.name || '—'}
                 </h3>
                 <div className="flex items-center gap-1">
@@ -186,7 +186,7 @@ export const UltraCompactVoterCard = ({ voter, index }) => {
           </div>
 
           {/* Name */}
-          <span className="text-sm font-medium text-gray-900 truncate flex-1">
+          <span className="text-sm font-medium text-gray-900 break-words flex-1">
             {voter.name || '—'}
           </span>
 
