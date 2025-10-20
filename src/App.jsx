@@ -8,7 +8,6 @@ import FullVoterDetails from './Components/FullVoterDetails';
 import Upload from './Components/Upload';
 import './App.css';
 import Home from './Pages/Home';
-import FilterPage from './Components/Filterpage';
 import ListModePage from './Components/ListModePage';
 import StyledFilterPage from './Components/Filterpage';
 
@@ -114,7 +113,7 @@ function App() {
           />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/home" element={<Home />} />
-          <Route path="/filters" element={<FilterPage />} />
+          
           <Route path="/voter/:voterId" element={<FullVoterDetails />} />
           <Route path="/" element={<Navigate to="/home" replace />} />
           <Route path="/lists" element={<StyledFilterPage />} />
