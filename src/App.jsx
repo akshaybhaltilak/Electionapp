@@ -9,7 +9,7 @@ import Upload from './Components/Upload';
 import './App.css';
 import Home from './Pages/Home';
 import ListModePage from './Components/ListModePage';
-import StyledFilterPage from './Components/Filterpage';
+import FilterPage from './Components/Filterpage';
 
 function App() {
   const [currentView, setCurrentView] = useState('upload');
@@ -116,7 +116,7 @@ function App() {
           
           <Route path="/voter/:voterId" element={<FullVoterDetails />} />
           <Route path="/" element={<Navigate to="/home" replace />} />
-          <Route path="/lists" element={<StyledFilterPage />} />
+          <Route path="/lists" element={<FilterPage />} />
 <Route path="/lists/:mode" element={<ListModePage />} />
 
         </Routes>
