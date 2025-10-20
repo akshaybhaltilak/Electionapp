@@ -446,7 +446,7 @@ const FullVoterDetails = () => {
                     <div><div className="font-semibold">{v.name}</div><div className="text-xs text-gray-500">{v.voterId}</div></div>
                     <div className="text-xs text-gray-500">{v.id}</div>
                   </div>
-                )) : (<div className="text-sm text-gray-500">No voters found</div>)}
+                )) : (<div className="text-sm text-gray-500">No voter found</div>)}
               </div>
             </div>
           </div>
