@@ -9,7 +9,7 @@ import Upload from './Components/Upload';
 import './App.css';
 import Home from './Pages/Home';
 import ListModePage from './Components/ListModePage';
-import FilterPage from './Components/Filterpage';
+import FilterPage from './Components/FilterPage';
 
 function App() {
   const [currentView, setCurrentView] = useState('upload');
