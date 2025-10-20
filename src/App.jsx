@@ -1,3 +1,5 @@
+
+
 import React, { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, Link } from 'react-router-dom';
 import useAutoTranslate from './hooks/useAutoTranslate';
@@ -7,7 +9,7 @@ import Upload from './Components/Upload';
 import './App.css';
 import Home from './Pages/Home';
 import ListModePage from './Components/ListModePage';
-import FilterPage from './Components/FilterPage';
+import StyledFilterPage from './Components/styledFilterPage';
 
 function App() {
   const [currentView, setCurrentView] = useState('upload');
@@ -114,7 +116,7 @@ function App() {
           
           <Route path="/voter/:voterId" element={<FullVoterDetails />} />
           <Route path="/" element={<Navigate to="/home" replace />} />
-          <Route path="/lists" element={<FilterPage />} />
+          <Route path="/lists" element={<StyledFilterPage />} />
 <Route path="/lists/:mode" element={<ListModePage />} />
 
         </Routes>

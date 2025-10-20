@@ -20,7 +20,7 @@ import { useNavigate } from 'react-router-dom';
 // - Mobile-first responsive styling and accessible tap targets
 // - Lightweight: keeps data processing local and sends mode via route params
 
-const FilterPage = () => {
+const StyledFilterPage = () => {
   const [voters, setVoters] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedMode, setSelectedMode] = useState(null);
@@ -203,4 +203,4 @@ const QuickChip = ({ label, onClick }) => (
   </button>
 );
 
-export default FilterPage;
+export default StyledFilterPage;
