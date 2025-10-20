@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { db, ref, get, storage } from '../Firebase/config';
+import { db, ref, get, storage, onValue, off } from '../Firebase/config';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
@@ -66,6 +66,57 @@ const FullVoterDetails = () => {
   useEffect(() => {
     localStorage.setItem('localCandidateInfo', JSON.stringify(politicalInfo));
   }, [politicalInfo]);
+
+  // Sync candidate info from Home branding (localStorage + RTDB) for a unified source
+  useEffect(() => {
+    const HOME_BRANDING_KEY = 'janetaa_home_branding_v1';
+
+    const mapBrandingToCandidate = (branding, current) => {
+      if (!branding) return null;
+      return {
+        candidateName: branding.leaderName || (current && current.candidateName) || politicalInfo.candidateName,
+        partyName: branding.partyName || (current && current.partyName) || politicalInfo.partyName || '',
+        partySymbol: branding.serialNumber || (current && current.partySymbol) || politicalInfo.partySymbol || '',
+        slogan: branding.slogan || (current && current.slogan) || politicalInfo.slogan,
+        contact: branding.contact || (current && current.contact) || politicalInfo.contact || '',
+        website: branding.website || (current && current.website) || politicalInfo.website || '',
+        achievements: (branding.achievements && branding.achievements.length) ? branding.achievements : (current && current.achievements) || politicalInfo.achievements || [],
+        candidateImage: branding.leaderImageUrl || (current && current.candidateImage) || politicalInfo.candidateImage || null
+      };
+    };
+
+    // Try localStorage first
+    try {
+      const raw = localStorage.getItem(HOME_BRANDING_KEY);
+      if (raw) {
+        const branding = JSON.parse(raw);
+        const mapped = mapBrandingToCandidate(branding, null);
+        if (mapped) setPoliticalInfo(prev => ({ ...prev, ...mapped }));
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    // Subscribe to remote branding (realtime)
+    try {
+      const remoteRef = ref(db, 'branding/current');
+      const callback = (snap) => {
+        const remote = snap.val();
+        if (remote) {
+          // only overwrite if user is not actively editing
+          setPoliticalInfo(prev => {
+            if (editing) return prev;
+            const mapped = mapBrandingToCandidate(remote, prev);
+            return { ...prev, ...mapped };
+          });
+        }
+      };
+      onValue(remoteRef, callback);
+      return () => off(remoteRef, 'value', callback);
+    } catch (e) {
+      // realtime not available
+    }
+  }, [editing]);
 
   useEffect(() => {
     loadVoterDetails();
@@ -193,10 +244,41 @@ ${voter.age ? `• Age: ${voter.age} years\n` : ''}${voter.gender ? `• Gender:
   };
 
   const shareOnWhatsApp = () => {
-    const message = generateWhatsAppMessage();
-    const url = `https://wa.me/?text=${encodeURIComponent(message)}`;
-    window.open(url, '_blank');
-    setShowShareOptions(false);
+    (async () => {
+      const message = generateWhatsAppMessage();
+      const imageUrl = politicalInfo.candidateImage;
+
+      const fetchImageBlob = async (url) => {
+        try {
+          const res = await fetch(url);
+          if (!res.ok) throw new Error('Image fetch failed');
+          return await res.blob();
+        } catch (err) {
+          return null;
+        }
+      };
+
+      try {
+        if (navigator.canShare && imageUrl) {
+          const blob = await fetchImageBlob(imageUrl);
+          if (blob) {
+            const file = new File([blob], 'candidate.jpg', { type: blob.type || 'image/jpeg' });
+            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+              await navigator.share({ files: [file], text: message, title: 'Voter Receipt' });
+              setShowShareOptions(false);
+              return;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Web Share failed', err);
+      }
+
+      // fallback to wa.me text-only
+      const url = `https://wa.me/?text=${encodeURIComponent(message)}`;
+      window.open(url, '_blank');
+      setShowShareOptions(false);
+    })();
   };
 
   const shareViaSMS = () => {
@@ -478,31 +560,41 @@ ${voter.age ? `• Age: ${voter.age} years\n` : ''}${voter.gender ? `• Gender:
               <div className="w-20 h-1 bg-orange-400 mx-auto rounded-full"></div>
             </div>
 
-            {/* Candidate Image Upload */}
+            {/* Candidate Image / Badge */}
             <div className="text-center mb-4">
               <div className="flex flex-col items-center gap-3">
-                {(politicalInfo.candidateImage || imagePreview) && (
-                  <div className="relative">
-                    <img 
-                      src={politicalInfo.candidateImage || imagePreview} 
-                      alt="Candidate" 
-                      className="w-24 h-24 rounded-full object-cover border-4 border-orange-300 shadow-lg"
-                    />
-                    {editing && (
-                      <button
-                        onClick={() => {
-                          setPoliticalInfo(prev => ({ ...prev, candidateImage: null }));
-                          setImagePreview(null);
-                          setSelectedImage(null);
-                        }}
-                        className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-lg hover:bg-red-600 transition-colors"
-                      >
-                        <FiX size={14} />
-                      </button>
-                    )}
+                <div className="relative">
+                  <div className="w-36 h-36 rounded-full bg-gradient-to-br from-orange-400 to-amber-300 p-1 shadow-xl inline-flex items-center justify-center">
+                    <div className="w-32 h-32 rounded-full bg-white overflow-hidden">
+                      <img
+                        src={imagePreview || politicalInfo.candidateImage || '/placeholder-person.png'}
+                        alt="Candidate"
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
                   </div>
-                )}
-                
+
+                  {/* Party badge */}
+                  <div className="absolute -bottom-2 right-0 bg-white rounded-full p-1 shadow-md border border-orange-200">
+                    <div className="w-10 h-10 rounded-full overflow-hidden flex items-center justify-center bg-orange-50">
+                      <span className="text-xs text-orange-600 font-bold">{politicalInfo.partySymbol || 'SYM'}</span>
+                    </div>
+                  </div>
+
+                  {editing && (
+                    <button
+                      onClick={() => {
+                        setPoliticalInfo(prev => ({ ...prev, candidateImage: null }));
+                        setImagePreview(null);
+                        setSelectedImage(null);
+                      }}
+                      className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-lg hover:bg-red-600 transition-colors"
+                    >
+                      <FiX size={14} />
+                    </button>
+                  )}
+                </div>
+
                 {editing && (
                   <div className="flex flex-col items-center gap-2">
                     <label className="flex items-center gap-2 bg-orange-500 text-white px-4 py-2 rounded-lg cursor-pointer hover:bg-orange-600 transition-colors text-sm">
