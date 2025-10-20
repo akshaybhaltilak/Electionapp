@@ -334,7 +334,7 @@ const VoterList = ({ voters, loading, onLoadMore, hasMore, compact = false }) =>
         <div className="flex justify-center items-center py-4 border-t border-gray-100">
           <FiLoader className="animate-spin text-orange-500 text-xl mr-3" />
           <span className="text-gray-600">
-            <TranslatedText>Loading more voters...</TranslatedText>
+            <TranslatedText>Loading more voter</TranslatedText>
           </span>
         </div>
       )}
