@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, set, push, get, query, orderByChild, equalTo, onValue, off } from 'firebase/database';
+import { getDatabase, ref, set, push, get, query, orderByChild, equalTo, onValue, off, update } from 'firebase/database';
 import { getStorage } from 'firebase/storage';
 
 // Add this to your Firebase config
@@ -50,5 +50,5 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const db = getDatabase(app);
-export { ref, set, push, get, query, orderByChild, equalTo, onValue, off };
+export { ref, set, push, get, query, orderByChild, equalTo, onValue, off, update };
 export const storage = getStorage(app);

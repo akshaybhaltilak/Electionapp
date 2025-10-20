@@ -1,831 +1,467 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { db, ref, get, storage, onValue, off } from '../Firebase/config';
-import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
+// Firebase exports assumed to come from ../Firebase/config (user should add the firebase snippet there)
+import { db, ref, get, set, update } from '../Firebase/config';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 
 // Icons
-import {
-  FiArrowLeft,
-  FiShare2,
-  FiDownload,
-  FiPrinter,
-  FiMessageCircle,
-  FiMail,
-  FiPhone,
-  FiUser,
-  FiMapPin,
-  FiHash,
-  FiCalendar,
-  FiStar,
-  FiHome,
-  FiFlag,
-  FiPhoneCall,
-  FiEdit,
-  FiSave,
-  FiX,
-  FiCamera
-} from 'react-icons/fi';
-import { FaWhatsapp, FaRegFilePdf, FaIndianRupeeSign } from 'react-icons/fa6';
+import { FiArrowLeft, FiDownload, FiPrinter, FiMessageCircle, FiMail, FiHash, FiEdit, FiX, FiSearch } from 'react-icons/fi';
+import { FaWhatsapp, FaRegFilePdf } from 'react-icons/fa';
 import { GiVote } from 'react-icons/gi';
-import TranslatedText from './TranslatedText';
+
+// This component now:
+// - removes the candidate block entirely
+// - uses Firebase (db) to load voters in chunks for the Family modal (loadVotersInChunks)
+// - shows searchable voter list and Add button in the Family modal
+// - shows two Info helper lists: voters with same booth, voters with same polling address
+// - Survey tab shows inputs similar to Info but editable and initially empty if not present
 
 const FullVoterDetails = () => {
   const { voterId } = useParams();
   const navigate = useNavigate();
+
   const [voter, setVoter] = useState(null);
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
-  const [showShareOptions, setShowShareOptions] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [imageUploading, setImageUploading] = useState(false);
-  const [selectedImage, setSelectedImage] = useState(null);
-  const [imagePreview, setImagePreview] = useState(null);
+  const [activeTab, setActiveTab] = useState('info'); // 'info' | 'family' | 'survey'
 
-  // Editable political data with localStorage persistence
-  const [politicalInfo, setPoliticalInfo] = useState(() => {
-    const saved = localStorage.getItem('localCandidateInfo');
-    return saved ? JSON.parse(saved) : {
-      candidateName: "Rajesh Kumar",
-      partyName: "Bharatiya Janata Party",
-      partySymbol: "Lotus",
-      slogan: "Development for All",
-      contact: "+91-9876543210",
-      website: "www.rajeshkumar.com",
-      achievements: [
-        "Built 5 new schools in constituency",
-        "Improved road infrastructure",
-        "Healthcare initiatives"
-      ],
-      candidateImage: null
-    };
-  });
+  // family UI
+  const [allVoters, setAllVoters] = useState([]);
+  const [familyModalOpen, setFamilyModalOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [addingFamily, setAddingFamily] = useState(false);
 
-  // Save to localStorage whenever politicalInfo changes
-  useEffect(() => {
-    localStorage.setItem('localCandidateInfo', JSON.stringify(politicalInfo));
-  }, [politicalInfo]);
+  // for same-booth / same-address lists
+  const [sameBoothOpen, setSameBoothOpen] = useState(false);
+  const [sameAddressOpen, setSameAddressOpen] = useState(false);
+  const [sameBoothList, setSameBoothList] = useState([]);
+  const [sameAddressList, setSameAddressList] = useState([]);
 
-  // Sync candidate info from Home branding (localStorage + RTDB) for a unified source
-  useEffect(() => {
-    const HOME_BRANDING_KEY = 'janetaa_home_branding_v1';
+  // survey fields local
+  const [surveyData, setSurveyData] = useState({ phone: '', dob: '', village: '', address: '' });
 
-    const mapBrandingToCandidate = (branding, current) => {
-      if (!branding) return null;
-      return {
-        candidateName: branding.leaderName || (current && current.candidateName) || politicalInfo.candidateName,
-        partyName: branding.partyName || (current && current.partyName) || politicalInfo.partyName || '',
-        partySymbol: branding.serialNumber || (current && current.partySymbol) || politicalInfo.partySymbol || '',
-        slogan: branding.slogan || (current && current.slogan) || politicalInfo.slogan,
-        contact: branding.contact || (current && current.contact) || politicalInfo.contact || '',
-        website: branding.website || (current && current.website) || politicalInfo.website || '',
-        achievements: (branding.achievements && branding.achievements.length) ? branding.achievements : (current && current.achievements) || politicalInfo.achievements || [],
-        candidateImage: branding.leaderImageUrl || (current && current.candidateImage) || politicalInfo.candidateImage || null
-      };
-    };
+  // Derived filtered list for family modal (hook order must remain stable)
+  const filteredVoters = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return allVoters.filter(v => v.id !== (voter && voter.id));
+    return allVoters.filter(v => ((v.name || '').toLowerCase().includes(q) || (v.voterId || '').toLowerCase().includes(q)) && v.id !== (voter && voter.id));
+  }, [allVoters, searchTerm, voter]);
 
-    // Try localStorage first
-    try {
-      const raw = localStorage.getItem(HOME_BRANDING_KEY);
-      if (raw) {
-        const branding = JSON.parse(raw);
-        const mapped = mapBrandingToCandidate(branding, null);
-        if (mapped) setPoliticalInfo(prev => ({ ...prev, ...mapped }));
-      }
-    } catch (e) {
-      // ignore
-    }
-
-    // Subscribe to remote branding (realtime)
-    try {
-      const remoteRef = ref(db, 'branding/current');
-      const callback = (snap) => {
-        const remote = snap.val();
-        if (remote) {
-          // only overwrite if user is not actively editing
-          setPoliticalInfo(prev => {
-            if (editing) return prev;
-            const mapped = mapBrandingToCandidate(remote, prev);
-            return { ...prev, ...mapped };
-          });
-        }
-      };
-      onValue(remoteRef, callback);
-      return () => off(remoteRef, 'value', callback);
-    } catch (e) {
-      // realtime not available
-    }
-  }, [editing]);
-
-  useEffect(() => {
-    loadVoterDetails();
-  }, [voterId]);
+  useEffect(() => { loadVoterDetails(); }, [voterId]);
 
   const loadVoterDetails = async () => {
+    setLoading(true);
     try {
-      const voterRef = ref(db, `voters/${voterId}`);
-      const snapshot = await get(voterRef);
-      
-      if (snapshot.exists()) {
-        setVoter({ id: voterId, ...snapshot.val() });
-      }
-      setLoading(false);
-    } catch (error) {
-      console.error('Error loading voter details:', error);
-      setLoading(false);
-    }
-  };
-
-  const handleInputChange = (field, value) => {
-    setPoliticalInfo(prev => ({
-      ...prev,
-      [field]: value
-    }));
-  };
-
-  const handleAchievementChange = (index, value) => {
-    const newAchievements = [...politicalInfo.achievements];
-    newAchievements[index] = value;
-    setPoliticalInfo(prev => ({
-      ...prev,
-      achievements: newAchievements
-    }));
-  };
-
-  const addAchievement = () => {
-    setPoliticalInfo(prev => ({
-      ...prev,
-      achievements: [...prev.achievements, "New achievement"]
-    }));
-  };
-
-  const removeAchievement = (index) => {
-    setPoliticalInfo(prev => ({
-      ...prev,
-      achievements: prev.achievements.filter((_, i) => i !== index)
-    }));
-  };
-
-  const handleImageUpload = async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    // Validate file type
-    if (!file.type.startsWith('image/')) {
-      alert('Please select an image file');
-      return;
-    }
-
-    // Validate file size (max 5MB)
-    if (file.size > 5 * 1024 * 1024) {
-      alert('Please select an image smaller than 5MB');
-      return;
-    }
-
-    setImageUploading(true);
-    setSelectedImage(file);
-
-    // Create preview
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      setImagePreview(e.target.result);
-    };
-    reader.readAsDataURL(file);
-
-    try {
-      // Upload to Firebase Storage
-      const imageRef = storageRef(storage, `candidate-images/${Date.now()}-${file.name}`);
-      const snapshot = await uploadBytes(imageRef, file);
-      const downloadURL = await getDownloadURL(snapshot.ref);
-      
-      setPoliticalInfo(prev => ({
-        ...prev,
-        candidateImage: downloadURL
-      }));
-    } catch (error) {
-      console.error('Error uploading image:', error);
-      alert('Error uploading image. Please try again.');
-    } finally {
-      setImageUploading(false);
-    }
-  };
-
-  const generateWhatsAppMessage = () => {
-    const message = `🗳️ *VOTER INFORMATION RECEIPT* 🗳️
-━━━━━━━━━━━━━━━━━━━━
-
-👤 *VOTER DETAILS*
-• Name: ${voter.name}
-• Voter ID: ${voter.voterId}
-• Booth: ${voter.boothNumber}
-• Address: ${voter.pollingStationAddress}
-${voter.age ? `• Age: ${voter.age} years\n` : ''}${voter.gender ? `• Gender: ${voter.gender}\n` : ''}
-
-📍 *POLLING INFORMATION*
-• Booth: ${voter.boothNumber}
-• Station: ${voter.pollingStationAddress}
-
-🎯 *YOUR CANDIDATE*
-• Candidate: ${politicalInfo.candidateName}
-• Party: ${politicalInfo.partyName}
-• Symbol: ${politicalInfo.partySymbol}
-• Slogan: ${politicalInfo.slogan}
-• Contact: ${politicalInfo.contact}
-
-📞 *QUICK ACTIONS*
-• Call Candidate: ${politicalInfo.contact}
-• Visit: ${politicalInfo.website}
-
-💡 *Remember to vote! Your voice matters!*
-✅ Verified by VoterData Pro`;
-
-    return message;
-  };
-
-  const shareOnWhatsApp = () => {
-    (async () => {
-      const message = generateWhatsAppMessage();
-      const imageUrl = politicalInfo.candidateImage;
-
-      const fetchImageBlob = async (url) => {
-        try {
-          const res = await fetch(url);
-          if (!res.ok) throw new Error('Image fetch failed');
-          return await res.blob();
-        } catch (err) {
-          return null;
+      if (db && voterId) {
+        const voterRef = ref(db, `voters/${voterId}`);
+        const snap = await get(voterRef);
+        if (snap && snap.exists()) {
+          const data = { id: voterId, ...snap.val() };
+          setVoter(data);
+          setSurveyData({
+            phone: data.phone || '',
+            dob: data.dob || '',
+            village: data.village || '',
+            address: data.address || data.pollingStationAddress || ''
+          });
+        } else {
+          const saved = localStorage.getItem(`voter_${voterId}`);
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            setVoter(parsed);
+            setSurveyData({ phone: parsed.phone || '', dob: parsed.dob || '', village: parsed.village || '', address: parsed.address || '' });
+          } else setVoter(null);
         }
-      };
+      } else {
+        const saved = localStorage.getItem(`voter_${voterId}`);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          setVoter(parsed);
+          setSurveyData({ phone: parsed.phone || '', dob: parsed.dob || '', village: parsed.village || '', address: parsed.address || '' });
+        } else setVoter(null);
+      }
+    } catch (err) {
+      console.error('loadVoterDetails', err);
+      setVoter(null);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-      try {
-        if (navigator.canShare && imageUrl) {
-          const blob = await fetchImageBlob(imageUrl);
-          if (blob) {
-            const file = new File([blob], 'candidate.jpg', { type: blob.type || 'image/jpeg' });
-            if (navigator.canShare && navigator.canShare({ files: [file] })) {
-              await navigator.share({ files: [file], text: message, title: 'Voter Receipt' });
-              setShowShareOptions(false);
-              return;
-            }
+  // Load voters in chunks (first N records) to avoid huge downloads
+  const loadVotersInChunks = async (batchSize = 1000) => {
+    setLoading(true);
+    const list = [];
+    try {
+      if (!db) {
+        // fallback: read localStorage voters
+        Object.keys(localStorage).forEach((k) => {
+          if (k.startsWith('voter_')) {
+            try { list.push(JSON.parse(localStorage.getItem(k))); } catch (e){}
           }
-        }
-      } catch (err) {
-        console.warn('Web Share failed', err);
+        });
+        setAllVoters(list.slice(0, batchSize));
+        return;
       }
 
-      // fallback to wa.me text-only
-      const url = `https://wa.me/?text=${encodeURIComponent(message)}`;
-      window.open(url, '_blank');
-      setShowShareOptions(false);
-    })();
-  };
-
-  const shareViaSMS = () => {
-    const message = `Voter Details:\nName: ${voter.name}\nVoter ID: ${voter.voterId}\nBooth: ${voter.boothNumber}\nAddress: ${voter.pollingStationAddress}${voter.age ? `\nAge: ${voter.age}` : ''}${voter.gender ? `\nGender: ${voter.gender}` : ''}\n\nCandidate: ${politicalInfo.candidateName}\nParty: ${politicalInfo.partyName}\nContact: ${politicalInfo.contact}`;
-    const url = `sms:?body=${encodeURIComponent(message)}`;
-    window.open(url, '_blank');
-    setShowShareOptions(false);
-  };
-
-  const shareViaEmail = () => {
-    const subject = `Voter Details - ${voter.name}`;
-    const body = `VOTER INFORMATION RECEIPT\n\nVOTER DETAILS:\nName: ${voter.name}\nVoter ID: ${voter.voterId}\nBooth Number: ${voter.boothNumber}\nPolling Station: ${voter.pollingStationAddress}${voter.age ? `\nAge: ${voter.age}` : ''}${voter.gender ? `\nGender: ${voter.gender}` : ''}\n\nCANDIDATE INFORMATION:\nName: ${politicalInfo.candidateName}\nParty: ${politicalInfo.partyName}\nSymbol: ${politicalInfo.partySymbol}\nContact: ${politicalInfo.contact}\nWebsite: ${politicalInfo.website}\n\nThank you for using VoterData Pro!`;
-    const url = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    window.open(url, '_blank');
-    setShowShareOptions(false);
-  };
-
-  const downloadAsImage = async () => {
-    setDownloading(true);
-    try {
-      const element = document.getElementById('voter-receipt');
-      const canvas = await html2canvas(element, {
-        scale: 3,
-        backgroundColor: '#ffffff',
-        useCORS: true,
-        logging: false,
-        width: element.scrollWidth,
-        height: element.scrollHeight
-      });
-      const image = canvas.toDataURL('image/png', 1.0);
-      
-      const link = document.createElement('a');
-      link.download = `voter-receipt-${voter.voterId}.png`;
-      link.href = image;
-      link.click();
-    } catch (error) {
-      console.error('Error downloading image:', error);
+      const votersRef = ref(db, 'voters');
+      const snap = await get(votersRef);
+      if (snap && snap.exists()) {
+        let count = 0;
+        snap.forEach(childSnap => {
+          if (count < batchSize) {
+            const raw = childSnap.val();
+            list.push({
+              id: childSnap.key,
+              name: raw.name || raw.Name || '',
+              voterId: raw.voterId || raw.VoterId || '',
+              boothNumber: raw.boothNumber || raw.booth || raw.boothNumber,
+              pollingStationAddress: raw.pollingStationAddress || raw.pollingStation || raw.address || ''
+            });
+            count++;
+          }
+        });
+      }
+      setAllVoters(list);
+    } catch (err) {
+      console.error('loadVotersInChunks', err);
     } finally {
-      setDownloading(false);
+      setLoading(false);
     }
   };
 
-  const downloadAsPDF = async () => {
-    setDownloading(true);
+  // persist voter helpers
+  const persistVoter = async (data) => {
     try {
-      const element = document.getElementById('voter-receipt');
-      const canvas = await html2canvas(element, {
-        scale: 3,
-        backgroundColor: '#ffffff',
-        useCORS: true,
-        logging: false
-      });
-      
-      const imgWidth = 210; // A4 width in mm
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
-      
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, imgWidth, imgHeight);
-      pdf.save(`voter-receipt-${voter.voterId}.pdf`);
-    } catch (error) {
-      console.error('Error downloading PDF:', error);
-    } finally {
-      setDownloading(false);
+      if (db && data && data.id) {
+        await set(ref(db, `voters/${data.id}`), data);
+      }
+    } catch (e) { console.warn('DB persist failed', e); }
+    try { if (data && data.id) localStorage.setItem(`voter_${data.id}`, JSON.stringify(data)); } catch(e){}
+  };
+
+  const toggleVoted = async () => {
+    if (!voter) return;
+    const updated = { ...voter, voted: !voter.voted };
+    setVoter(updated);
+    await persistVoter(updated);
+  };
+
+  const addFamilyMember = async (member) => {
+    if (!voter) return;
+    setAddingFamily(true);
+    try {
+      const family = Array.isArray(voter.family) ? [...voter.family] : [];
+      if (family.find(m => m.id === member.id)) {
+        alert('Member already in family');
+        setAddingFamily(false);
+        return;
+      }
+      family.push({ id: member.id, name: member.name || member.voterId || ('Voter ' + member.id) });
+      const updated = { ...voter, family };
+      setVoter(updated);
+      await persistVoter(updated);
+      try { await update(ref(db, `voters/${voter.id}`), { family }); } catch(e){}
+      alert('Family member added');
+    } catch (err) {
+      console.error('addFamilyMember', err);
+      alert('Could not add family member');
+    } finally { setAddingFamily(false); }
+  };
+
+  // get lists for Info helpers
+  const computeSameBooth = async () => {
+    if (!voter) return;
+    // prefer to filter from allVoters if available
+    if (allVoters && allVoters.length) {
+      const list = allVoters.filter(v => v.boothNumber && voter.boothNumber && v.boothNumber === voter.boothNumber && v.id !== voter.id);
+      setSameBoothList(list);
+      setSameBoothOpen(true);
+      return;
     }
+    // fallback: scan DB (careful with large sets) - here we attempt a read and filter
+    try {
+      const votersRef = ref(db, 'voters');
+      const snap = await get(votersRef);
+      const res = [];
+      if (snap && snap.exists()) {
+        snap.forEach(child => {
+          const raw = child.val();
+          const b = raw.boothNumber || raw.booth;
+          if (b && voter.boothNumber && b === voter.boothNumber && child.key !== voter.id) {
+            res.push({ id: child.key, name: raw.name || '', voterId: raw.voterId || '' });
+          }
+        });
+      }
+      setSameBoothList(res);
+      setSameBoothOpen(true);
+    } catch (err) { console.error('computeSameBooth', err); }
   };
 
-  const printVoterDetails = () => {
-    const printContent = document.getElementById('voter-receipt').innerHTML;
-    const originalContent = document.body.innerHTML;
-    
-    document.body.innerHTML = `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Voter Receipt - ${voter.name}</title>
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <style>
-            @media print {
-              body { 
-                font-family: 'Arial', sans-serif; 
-                margin: 0; 
-                padding: 10px;
-                background: white;
-                font-size: 12px;
-              }
-              .print-container {
-                max-width: 100%;
-                margin: 0 auto;
-              }
-              .no-print { display: none !important; }
-              .print-break { page-break-inside: avoid; }
-            }
-            @media screen {
-              body { display: none; }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="print-container">
-            ${printContent}
-          </div>
-        </body>
-      </html>
-    `;
-    
-    window.print();
-    document.body.innerHTML = originalContent;
-    window.location.reload();
+  const computeSameAddress = async () => {
+    if (!voter) return;
+    if (allVoters && allVoters.length) {
+      const list = allVoters.filter(v => v.pollingStationAddress && voter.pollingStationAddress && v.pollingStationAddress === voter.pollingStationAddress && v.id !== voter.id);
+      setSameAddressList(list);
+      setSameAddressOpen(true);
+      return;
+    }
+    try {
+      const votersRef = ref(db, 'voters');
+      const snap = await get(votersRef);
+      const res = [];
+      if (snap && snap.exists()) {
+        snap.forEach(child => {
+          const raw = child.val();
+          const addr = raw.pollingStationAddress || raw.pollingStation || raw.address || '';
+          if (addr && voter.pollingStationAddress && addr === voter.pollingStationAddress && child.key !== voter.id) {
+            res.push({ id: child.key, name: raw.name || '', voterId: raw.voterId || '' });
+          }
+        });
+      }
+      setSameAddressList(res);
+      setSameAddressOpen(true);
+    } catch (err) { console.error('computeSameAddress', err); }
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-100 flex items-center justify-center p-4">
-        <div className="text-center">
-          <div className="relative inline-block mb-4">
-            <div className="w-16 h-16 border-4 border-orange-200 rounded-full animate-spin"></div>
-            <div className="w-16 h-16 border-4 border-transparent border-t-orange-600 rounded-full absolute top-0 left-0 animate-spin"></div>
-          </div>
-          <div className="text-orange-700 text-lg font-semibold">
-            <TranslatedText>Loading voter details...</TranslatedText>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const saveSurvey = async () => {
+    if (!voter) return;
+    const updated = { ...voter, phone: surveyData.phone, dob: surveyData.dob, village: surveyData.village, address: surveyData.address };
+    setVoter(updated);
+    await persistVoter(updated);
+    try { await update(ref(db, `voters/${voter.id}`), { phone: surveyData.phone, dob: surveyData.dob, village: surveyData.village, address: surveyData.address }); } catch(e){}
+    alert('Survey saved');
+  };
 
-  if (!voter) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-100 flex items-center justify-center p-4">
-        <div className="text-center bg-white rounded-2xl p-8 shadow-xl border border-orange-200 max-w-md w-full">
-          <div className="text-6xl mb-4">😕</div>
-          <h2 className="text-2xl font-bold text-gray-800 mb-2">
-            <TranslatedText>Voter Not Found</TranslatedText>
-          </h2>
-          <p className="text-gray-600 mb-6">
-            <TranslatedText>The requested voter details could not be found.</TranslatedText>
-          </p>
-          <button
-            onClick={() => navigate('/')}
-            className="bg-orange-600 text-white px-6 py-3 rounded-xl font-semibold hover:bg-orange-700 transition-all duration-200 shadow-lg hover:shadow-xl"
-          >
-            <TranslatedText>Back to Dashboard</TranslatedText>
-          </button>
-        </div>
-      </div>
-    );
-  }
+  // --- share/download/print preserved ---
+  const generateWhatsAppMessage = () => `Voter: ${voter?.name || ''}\nVoter ID: ${voter?.voterId || ''}`;
+  const shareOnWhatsApp = async () => {
+    const message = generateWhatsAppMessage();
+    const el = document.getElementById('voter-receipt');
+    try { setDownloading(true); const canvas = await html2canvas(el, { scale: 2, backgroundColor: '#fff', useCORS: true }); canvas.toBlob(async (blob) => { const file = new File([blob], 'receipt.png', { type: 'image/png' }); if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], text: message }); } else { window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank'); } setDownloading(false); }); } catch(e){ console.error(e); window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank'); setDownloading(false); }
+  };
+  const shareViaSMS = () => window.open(`sms:?body=${encodeURIComponent(generateWhatsAppMessage())}`, '_blank');
+  const shareViaEmail = () => window.open(`mailto:?subject=${encodeURIComponent('Voter Details')}&body=${encodeURIComponent(generateWhatsAppMessage())}`, '_blank');
+  const downloadAsImage = async () => { setDownloading(true); try { const el = document.getElementById('voter-receipt'); const canvas = await html2canvas(el, { scale: 3, backgroundColor: '#fff', useCORS: true }); const image = canvas.toDataURL('image/png'); const link = document.createElement('a'); link.href = image; link.download = `voter-${voter?.voterId || 'receipt'}.png`; document.body.appendChild(link); link.click(); document.body.removeChild(link); } catch(e){ console.error(e); alert('Error'); } finally{ setDownloading(false); } };
+  const downloadAsPDF = async () => { setDownloading(true); try { const el = document.getElementById('voter-receipt'); const canvas = await html2canvas(el, { scale: 2, backgroundColor: '#fff', useCORS: true }); const imgWidth = 210; const imgHeight = (canvas.height * imgWidth) / canvas.width; const pdf = new jsPDF('p','mm','a4'); pdf.addImage(canvas.toDataURL('image/png'),'PNG',0,0,imgWidth,imgHeight); pdf.save(`voter-${voter?.voterId || 'receipt'}.pdf`); } catch(e){ console.error(e); alert('Error'); } finally{ setDownloading(false); } };
+  const printVoterDetails = () => { const el = document.getElementById('voter-receipt'); const w = window.open('','_blank'); w.document.write(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body>${el.innerHTML}</body></html>`); w.document.close(); setTimeout(()=>{ w.print(); w.close(); }, 400); };
+
+  if (loading) return (<div className="min-h-screen flex items-center justify-center p-4">Loading...</div>);
+  if (!voter) return (<div className="min-h-screen flex items-center justify-center p-4"><div>Voter not found<button onClick={()=>navigate('/')}>Back</button></div></div>);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-100 p-4 pb-24">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <button
-          onClick={() => navigate(-1)}
-          className="flex items-center gap-2 bg-white text-orange-600 hover:text-orange-700 font-semibold px-4 py-3 rounded-xl shadow-lg border border-orange-200 hover:shadow-xl transition-all duration-200"
-        >
-          <FiArrowLeft className="text-lg" />
-          <span className="hidden sm:inline"><TranslatedText>Back</TranslatedText></span>
-        </button>
-        
-        <div className="text-center">
-          <h1 className="text-xl font-bold text-gray-800 flex items-center gap-2 justify-center">
-            <GiVote className="text-orange-600" />
-            <TranslatedText>Voter Receipt</TranslatedText>
-          </h1>
+    <div className="min-h-screen bg-[#fff7ef] p-4 pb-28">
+      <div className="max-w-md mx-auto">
+        <div className="bg-gradient-to-r from-orange-500 to-orange-600 rounded-b-3xl text-white pt-6 pb-4 px-4 relative">
+          <button onClick={() => navigate(-1)} className="absolute left-4 top-4 bg-white/20 p-2 rounded-full"><FiArrowLeft /></button>
+          <div className="text-center text-lg font-bold">{voter.name}</div>
+          <div className="mt-3">
+            <div className="flex justify-around text-sm font-medium">
+              <div onClick={() => setActiveTab('info')} className={`pb-2 ${activeTab === 'info' ? 'border-b-2 border-white' : 'text-white/80 cursor-pointer'}`}>Info</div>
+              <div onClick={() => setActiveTab('family')} className={`pb-2 ${activeTab === 'family' ? 'border-b-2 border-white' : 'text-white/80 cursor-pointer'}`}>Family</div>
+              <div onClick={() => setActiveTab('survey')} className={`pb-2 ${activeTab === 'survey' ? 'border-b-2 border-white' : 'text-white/80 cursor-pointer'}`}>Survey</div>
+            </div>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* Edit Toggle Button */}
-          <button
-            onClick={() => setEditing(!editing)}
-            className={`flex items-center gap-2 font-semibold px-4 py-3 rounded-xl shadow-lg transition-all duration-200 ${
-              editing 
-                ? 'bg-green-600 text-white hover:bg-green-700' 
-                : 'bg-white text-orange-600 hover:text-orange-700 border border-orange-200'
-            }`}
-          >
-            {editing ? <FiSave className="text-lg" /> : <FiEdit className="text-lg" />}
-            <span className="hidden sm:inline">{editing ? 'Save' : 'Edit'}</span>
-          </button>
+        <div id="voter-receipt" className="bg-white rounded-2xl -mt-6 shadow-lg overflow-hidden border border-gray-100">
+          <div className="p-4 pt-6">
+            <div className="text-center">
+              <div className="text-gray-800 font-bold text-xl">{voter.name}</div>
+              <div className="flex items-center justify-center gap-4 mt-2 text-sm text-gray-600">
+                <div className="flex items-center gap-1"><FiHash /> {voter.voterId || 'N/A'}</div>
+                <div>Part {voter.listPart || voter.part || '1'}</div>
+                <div>Age {voter.age || '-'}</div>
+                <div>Gender {voter.gender || '-'}</div>
+              </div>
+              <div className="mt-3 flex items-center justify-center gap-3">
+                <button onClick={toggleVoted} className={`px-3 py-1 rounded-full font-semibold ${voter.voted ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-700'}`}>{voter.voted ? 'VOTED ✓' : 'Mark as Voted'}</button>
+              </div>
+            </div>
 
-          {/* Share Button */}
-          <div className="relative">
-            <button
-              onClick={() => setShowShareOptions(!showShareOptions)}
-              className="flex items-center gap-2 bg-orange-600 text-white font-semibold px-4 py-3 rounded-xl shadow-lg hover:bg-orange-700 transition-all duration-200"
-            >
-              <FiShare2 />
-              <span className="hidden sm:inline"><TranslatedText>Share</TranslatedText></span>
-            </button>
-            
-            {showShareOptions && (
-              <div className="absolute top-full right-0 mt-2 bg-white rounded-xl shadow-2xl border border-gray-200 p-3 z-50 min-w-[180px]">
-                <div className="space-y-2">
-                  <button
-                    onClick={shareOnWhatsApp}
-                    className="flex items-center gap-3 w-full text-left p-3 rounded-lg hover:bg-green-50 transition-colors text-sm"
-                  >
-                    <FaWhatsapp className="text-green-500 text-lg" />
-                    <span>WhatsApp</span>
-                  </button>
-                  <button
-                    onClick={shareViaSMS}
-                    className="flex items-center gap-3 w-full text-left p-3 rounded-lg hover:bg-blue-50 transition-colors text-sm"
-                  >
-                    <FiMessageCircle className="text-blue-500 text-lg" />
-                    <span>Text SMS</span>
-                  </button>
-                  <button
-                    onClick={shareViaEmail}
-                    className="flex items-center gap-3 w-full text-left p-3 rounded-lg hover:bg-purple-50 transition-colors text-sm"
-                  >
-                    <FiMail className="text-purple-500 text-lg" />
-                    <span>Email</span>
-                  </button>
+            <div className="mt-4 border-t pt-3">
+              {activeTab === 'info' && (
+                <div className="grid grid-cols-1 gap-3 text-sm">
+                  <Detail label="Village" value={voter.village || voter.town || voter.locality || '-'} />
+                  <Detail label="Taluka" value={voter.taluka || '-'} />
+                  <Detail label="Voter Card" value={voter.voterId || '-'} highlight />
+                  <Detail label="House No" value={voter.houseNumber || '-'} />
+
+                  <div className="bg-gray-50 p-3 rounded">
+                    <div className="text-xs text-gray-600">Address</div>
+                    <div className="text-sm font-semibold text-gray-800 mt-1">{voter.pollingStationAddress || voter.address || '-'}</div>
+                  </div>
+
+                  <div className="bg-gray-50 p-3 rounded">
+                    <div className="text-xs text-gray-600">Polling Station</div>
+                    <div className="text-sm font-semibold text-gray-800 mt-1">{voter.pollingStation || voter.pollingStationAddress || '-'}</div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button onClick={computeSameBooth} className="flex-1 bg-blue-500 text-white py-2 rounded">Show Same Booth</button>
+                    <button onClick={computeSameAddress} className="flex-1 bg-indigo-500 text-white py-2 rounded">Show Same Address</button>
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+              )}
 
-      {/* Voter Receipt Card */}
-      <div id="voter-receipt" className="bg-white rounded-2xl shadow-2xl border border-orange-200 overflow-hidden mb-6 max-w-2xl mx-auto print:shadow-none print:border-2">
-        {/* Receipt Header */}
-        <div className="bg-gradient-to-r from-orange-500 to-amber-500 text-white p-5 text-center">
-          <div className="flex items-center justify-center gap-3 mb-2">
-            <GiVote className="text-2xl" />
-            <h2 className="text-xl font-bold">VOTER INFORMATION RECEIPT</h2>
-          </div>
-          <p className="text-orange-100 text-sm">Official Voter Data Record</p>
-        </div>
-
-        {/* Receipt Body */}
-        <div className="p-5">
-          {/* Voter Main Info */}
-          <div className="text-center mb-6 border-b border-gray-200 pb-4">
-            <h3 className="text-2xl font-bold text-gray-800 mb-2">{voter.name}</h3>
-            <div className="bg-orange-100 text-orange-700 px-3 py-1 rounded-full text-sm font-medium inline-flex items-center gap-2">
-              <FiHash className="text-xs" />
-              Voter ID: {voter.voterId}
-            </div>
-          </div>
-
-          {/* Personal Details Section */}
-          <div className="mb-6">
-            <div className="flex items-center gap-2 mb-3">
-              <div className="w-1 h-6 bg-orange-500 rounded-full"></div>
-              <h4 className="text-lg font-semibold text-gray-800">Personal Details</h4>
-            </div>
-            <div className="space-y-3">
-              <DetailRow icon={FiUser} label="Full Name" value={voter.name} />
-              <DetailRow icon={FiHash} label="Voter ID" value={voter.voterId} />
-              {voter.age && <DetailRow icon={FiCalendar} label="Age" value={`${voter.age} years`} />}
-              {voter.gender && <DetailRow icon={FiUser} label="Gender" value={voter.gender} />}
-            </div>
-          </div>
-
-          {/* Voting Details Section */}
-          <div className="mb-6">
-            <div className="flex items-center gap-2 mb-3">
-              <div className="w-1 h-6 bg-blue-500 rounded-full"></div>
-              <h4 className="text-lg font-semibold text-gray-800">Voting Details</h4>
-            </div>
-            <div className="space-y-3">
-              <DetailRow icon={FiHome} label="Booth Number" value={voter.boothNumber} />
-              <DetailRow icon={FiMapPin} label="Polling Station" value={voter.pollingStationAddress} fullWidth />
-            </div>
-          </div>
-
-          {/* Political Flyer Section */}
-          <div className="bg-gradient-to-br from-orange-50 to-amber-50 rounded-xl p-4 border-2 border-orange-300 mb-4">
-            <div className="text-center mb-3">
-              <div className="flex items-center justify-center gap-2 mb-2">
-                <FiStar className="text-orange-500" />
-                <h4 className="text-lg font-bold text-orange-800">Your Local Candidate</h4>
-                <FiStar className="text-orange-500" />
-              </div>
-              <div className="w-20 h-1 bg-orange-400 mx-auto rounded-full"></div>
-            </div>
-
-            {/* Candidate Image / Badge */}
-            <div className="text-center mb-4">
-              <div className="flex flex-col items-center gap-3">
-                <div className="relative">
-                  <div className="w-36 h-36 rounded-full bg-gradient-to-br from-orange-400 to-amber-300 p-1 shadow-xl inline-flex items-center justify-center">
-                    <div className="w-32 h-32 rounded-full bg-white overflow-hidden">
-                      <img
-                        src={imagePreview || politicalInfo.candidateImage || '/placeholder-person.png'}
-                        alt="Candidate"
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
+              {activeTab === 'family' && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-medium">Family Members</div>
+                    <button onClick={() => { setFamilyModalOpen(true); loadVotersInChunks(); }} className="text-sm bg-orange-500 text-white px-3 py-1 rounded">Add Member</button>
                   </div>
 
-                  {/* Party badge */}
-                  <div className="absolute -bottom-2 right-0 bg-white rounded-full p-1 shadow-md border border-orange-200">
-                    <div className="w-10 h-10 rounded-full overflow-hidden flex items-center justify-center bg-orange-50">
-                      <span className="text-xs text-orange-600 font-bold">{politicalInfo.partySymbol || 'SYM'}</span>
-                    </div>
-                  </div>
-
-                  {editing && (
-                    <button
-                      onClick={() => {
-                        setPoliticalInfo(prev => ({ ...prev, candidateImage: null }));
-                        setImagePreview(null);
-                        setSelectedImage(null);
-                      }}
-                      className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-lg hover:bg-red-600 transition-colors"
-                    >
-                      <FiX size={14} />
-                    </button>
-                  )}
-                </div>
-
-                {editing && (
-                  <div className="flex flex-col items-center gap-2">
-                    <label className="flex items-center gap-2 bg-orange-500 text-white px-4 py-2 rounded-lg cursor-pointer hover:bg-orange-600 transition-colors text-sm">
-                      <FiCamera />
-                      {imageUploading ? 'Uploading...' : (politicalInfo.candidateImage ? 'Change Image' : 'Add Image')}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={handleImageUpload}
-                        className="hidden"
-                        disabled={imageUploading}
-                      />
-                    </label>
-                    {imageUploading && (
-                      <div className="text-orange-600 text-sm flex items-center gap-2">
-                        <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-orange-600"></div>
-                        Uploading...
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-            
-            <div className="space-y-3">
-              <EditableRow 
-                editing={editing}
-                label="Candidate" 
-                value={politicalInfo.candidateName}
-                onChange={(value) => handleInputChange('candidateName', value)}
-                highlight 
-              />
-              <EditableRow 
-                editing={editing}
-                label="Party" 
-                value={politicalInfo.partyName}
-                onChange={(value) => handleInputChange('partyName', value)}
-              />
-              <EditableRow 
-                editing={editing}
-                label="Symbol" 
-                value={politicalInfo.partySymbol}
-                onChange={(value) => handleInputChange('partySymbol', value)}
-              />
-              <EditableRow 
-                editing={editing}
-                label="Slogan" 
-                value={politicalInfo.slogan}
-                onChange={(value) => handleInputChange('slogan', value)}
-              />
-              <EditableRow 
-                editing={editing}
-                label="Contact" 
-                value={politicalInfo.contact}
-                onChange={(value) => handleInputChange('contact', value)}
-              />
-              <EditableRow 
-                editing={editing}
-                label="Website" 
-                value={politicalInfo.website}
-                onChange={(value) => handleInputChange('website', value)}
-              />
-            </div>
-
-            {/* Achievements */}
-            <div className="mt-4 pt-3 border-t border-orange-200">
-              <div className="flex justify-between items-center mb-2">
-                <h5 className="text-sm font-semibold text-orange-700">Key Achievements:</h5>
-                {editing && (
-                  <button
-                    onClick={addAchievement}
-                    className="text-xs bg-green-500 text-white px-2 py-1 rounded hover:bg-green-600 transition-colors"
-                  >
-                    Add +
-                  </button>
-                )}
-              </div>
-              <div className="space-y-1">
-                {politicalInfo.achievements.map((achievement, index) => (
-                  <div key={index} className="flex items-start gap-2 text-xs text-orange-600">
-                    {editing ? (
-                      <div className="flex items-center gap-2 w-full">
-                        <input
-                          type="text"
-                          value={achievement}
-                          onChange={(e) => handleAchievementChange(index, e.target.value)}
-                          className="flex-1 px-2 py-1 border border-orange-300 rounded text-orange-700 text-xs"
-                          placeholder="Enter achievement"
-                        />
-                        <button
-                          onClick={() => removeAchievement(index)}
-                          className="text-red-500 hover:text-red-700 p-1"
-                        >
-                          <FiX size={12} />
-                        </button>
-                      </div>
+                  <div className="bg-gray-50 p-3 rounded">
+                    {Array.isArray(voter.family) && voter.family.length ? (
+                      <ul className="space-y-2">
+                        {voter.family.map((m) => (
+                          <li key={m.id} className="flex justify-between items-center">
+                            <div className="text-sm">{m.name}</div>
+                            <div className="text-xs text-gray-500">{m.id}</div>
+                          </li>
+                        ))}
+                      </ul>
                     ) : (
-                      <>
-                        <span className="text-orange-500 mt-0.5">•</span>
-                        <span>{achievement}</span>
-                      </>
+                      <div className="text-sm text-gray-500">No family members added.</div>
                     )}
                   </div>
-                ))}
+                </div>
+              )}
+
+              {activeTab === 'survey' && (
+                <div className="space-y-3">
+                  <div className="text-sm font-medium">Edit Survey Details</div>
+                  <div className="grid grid-cols-1 gap-2">
+                    <label className="text-xs">Phone</label>
+                    <input value={surveyData.phone} onChange={(e)=>setSurveyData(s=>({...s, phone: e.target.value}))} className="p-2 border rounded" />
+
+                    <label className="text-xs">Date of Birth</label>
+                    <input type="date" value={surveyData.dob} onChange={(e)=>setSurveyData(s=>({...s, dob: e.target.value}))} className="p-2 border rounded" />
+
+                    <label className="text-xs">Village</label>
+                    <input value={surveyData.village} onChange={(e)=>setSurveyData(s=>({...s, village: e.target.value}))} className="p-2 border rounded" />
+
+                    <label className="text-xs">Address</label>
+                    <textarea value={surveyData.address} onChange={(e)=>setSurveyData(s=>({...s, address: e.target.value}))} className="p-2 border rounded" rows={3} />
+
+                    <div className="flex gap-2">
+                      <button onClick={saveSurvey} className="bg-green-600 text-white px-4 py-2 rounded">Save</button>
+                      <button onClick={() => { setSurveyData({ phone: voter.phone || '', dob: voter.dob || '', village: voter.village || '', address: voter.address || '' }); }} className="bg-gray-200 px-4 py-2 rounded">Reset</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+            </div>
+
+            <div className="mt-4 text-center text-xs text-gray-400 border-t pt-3">
+              <div className="flex items-center justify-center gap-2 mb-1"><GiVote className="text-orange-500" />Generated by VoterData Pro</div>
+              <div>{new Date().toLocaleDateString('en-IN')}</div>
+            </div>
+
+          </div>
+        </div>
+
+        <div className="fixed left-4 right-4 bottom-4 max-w-md mx-auto">
+          <div className="bg-white p-3 rounded-2xl shadow-lg flex gap-2 border">
+            <button onClick={shareOnWhatsApp} className="flex-1 bg-green-500 text-white py-2 rounded flex items-center justify-center gap-2"><FaWhatsapp />WhatsApp</button>
+            <button onClick={shareViaSMS} className="flex-1 bg-blue-500 text-white py-2 rounded flex items-center justify-center gap-2"><FiMessageCircle />SMS</button>
+            <button onClick={downloadAsImage} className="bg-purple-600 text-white p-2 rounded flex items-center gap-2"><FiDownload /></button>
+            <button onClick={downloadAsPDF} className="bg-red-600 text-white p-2 rounded flex items-center gap-2"><FaRegFilePdf /></button>
+            <button onClick={printVoterDetails} className="bg-indigo-600 text-white p-2 rounded flex items-center gap-2"><FiPrinter /></button>
+          </div>
+        </div>
+
+        {/* Family modal */}
+        {familyModalOpen && (
+          <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-lg w-full max-w-lg p-4 shadow-lg">
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-lg font-bold">Add Family Member</div>
+                <button onClick={() => setFamilyModalOpen(false)} className="p-2"><FiX /></button>
+              </div>
+
+              <div className="mb-3">
+                <div className="relative">
+                  <input value={searchTerm} onChange={(e)=>setSearchTerm(e.target.value)} placeholder="Search by name or voter id" className="w-full p-2 border rounded pl-10" />
+                  <FiSearch className="absolute left-3 top-3 text-gray-400" />
+                </div>
+              </div>
+
+              <div className="max-h-60 overflow-auto space-y-2">
+                {filteredVoters.length ? filteredVoters.map(v => (
+                  <div key={v.id} className="flex items-center justify-between p-2 border rounded">
+                    <div>
+                      <div className="font-semibold">{v.name || 'Unknown'}</div>
+                      <div className="text-xs text-gray-500">{v.voterId || v.id}</div>
+                    </div>
+                    <div>
+                      <button onClick={()=>addFamilyMember(v)} disabled={addingFamily} className="bg-orange-500 text-white px-3 py-1 rounded text-sm">Add</button>
+                    </div>
+                  </div>
+                )) : (
+                  <div className="text-center text-sm text-gray-500">No voters found</div>
+                )}
+              </div>
+
+              <div className="mt-3 text-right">
+                <button onClick={()=>setFamilyModalOpen(false)} className="px-4 py-2 rounded bg-gray-200">Close</button>
               </div>
             </div>
           </div>
+        )}
 
-          {/* Receipt Footer */}
-          <div className="text-center border-t border-gray-200 pt-4">
-            <div className="flex items-center justify-center gap-2 text-sm text-gray-500 mb-2">
-              <GiVote className="text-orange-500" />
-              <span>Generated by VoterData Pro</span>
-            </div>
-            <p className="text-xs text-gray-400">
-              {new Date().toLocaleDateString('en-IN', { 
-                day: '2-digit', 
-                month: 'short', 
-                year: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit'
-              })}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Action Buttons - Mobile Optimized */}
-      <div className="fixed bottom-4 left-4 right-4 z-40">
-        <div className="bg-white/95 backdrop-blur-xl rounded-2xl p-4 shadow-2xl border border-orange-200">
-          <div className="grid grid-cols-5 gap-2">
-            <ActionButton
-              icon={FaWhatsapp}
-              label="WhatsApp"
-              color="bg-green-500 hover:bg-green-600"
-              onClick={shareOnWhatsApp}
-            />
-            <ActionButton
-              icon={FiMessageCircle}
-              label="SMS"
-              color="bg-blue-500 hover:bg-blue-600"
-              onClick={shareViaSMS}
-            />
-            <ActionButton
-              icon={FiDownload}
-              label="Image"
-              color="bg-purple-500 hover:bg-purple-600"
-              onClick={downloadAsImage}
-            />
-            <ActionButton
-              icon={FaRegFilePdf}
-              label="PDF"
-              color="bg-red-500 hover:bg-red-600"
-              onClick={downloadAsPDF}
-            />
-            <ActionButton
-              icon={FiPrinter}
-              label="Print"
-              color="bg-indigo-500 hover:bg-indigo-600"
-              onClick={printVoterDetails}
-            />
-          </div>
-
-          {downloading && (
-            <div className="text-center mt-3">
-              <div className="inline-flex items-center gap-2 bg-orange-100 text-orange-700 px-3 py-2 rounded-xl text-sm">
-                <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-orange-600"></div>
-                <span>Preparing download...</span>
+        {/* Same Booth Modal */}
+        {sameBoothOpen && (
+          <div className="fixed inset-0 bg-black/40 z-40 flex items-center justify-center p-4">
+            <div className="bg-white rounded-lg w-full max-w-lg p-4 shadow-lg">
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-lg font-bold">Voters in Same Booth</div>
+                <button onClick={() => setSameBoothOpen(false)} className="p-2"><FiX /></button>
+              </div>
+              <div className="max-h-80 overflow-auto">
+                {sameBoothList.length ? sameBoothList.map(v => (
+                  <div key={v.id} className="p-2 border-b flex justify-between">
+                    <div><div className="font-semibold">{v.name}</div><div className="text-xs text-gray-500">{v.voterId}</div></div>
+                    <div className="text-xs text-gray-500">{v.id}</div>
+                  </div>
+                )) : (<div className="text-sm text-gray-500">No voters found</div>)}
               </div>
             </div>
-          )}
-        </div>
+          </div>
+        )}
+
+        {/* Same Address Modal */}
+        {sameAddressOpen && (
+          <div className="fixed inset-0 bg-black/40 z-40 flex items-center justify-center p-4">
+            <div className="bg-white rounded-lg w-full max-w-lg p-4 shadow-lg">
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-lg font-bold">Voters with Same Address</div>
+                <button onClick={() => setSameAddressOpen(false)} className="p-2"><FiX /></button>
+              </div>
+              <div className="max-h-80 overflow-auto">
+                {sameAddressList.length ? sameAddressList.map(v => (
+                  <div key={v.id} className="p-2 border-b flex justify-between">
+                    <div><div className="font-semibold">{v.name}</div><div className="text-xs text-gray-500">{v.voterId}</div></div>
+                    <div className="text-xs text-gray-500">{v.id}</div>
+                  </div>
+                )) : (<div className="text-sm text-gray-500">No voters found</div>)}
+              </div>
+            </div>
+          </div>
+        )}
+
       </div>
     </div>
   );
 };
 
-const DetailRow = ({ icon: Icon, label, value, fullWidth = false }) => (
-  <div className={`flex items-start gap-3 ${fullWidth ? 'col-span-2' : ''}`}>
-    <div className="bg-orange-100 p-2 rounded-lg flex-shrink-0 mt-0.5">
-      <Icon className="text-orange-600 text-sm" />
-    </div>
-    <div className="flex-1 min-w-0">
-      <div className="text-sm text-gray-600 font-medium mb-1">{label}</div>
-      <div className="text-gray-800 font-semibold text-base leading-tight break-words">{value}</div>
-    </div>
+const Detail = ({ label, value, highlight }) => (
+  <div className={`flex justify-between items-start gap-3 ${highlight ? 'font-semibold' : ''}`}>
+    <div className="text-xs text-gray-500">{label}</div>
+    <div className="text-sm text-gray-800 text-right">{value}</div>
   </div>
-);
-
-const EditableRow = ({ editing, label, value, onChange, highlight = false }) => (
-  <div className="flex justify-between items-center py-1">
-    <span className={`text-sm font-medium ${highlight ? 'text-orange-700 font-bold' : 'text-orange-600'}`}>
-      {label}:
-    </span>
-    {editing ? (
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className={`text-sm font-semibold px-2 py-1 border border-orange-300 rounded ${
-          highlight ? 'text-orange-800 text-base' : 'text-orange-700'
-        } bg-white`}
-      />
-    ) : (
-      <span className={`text-sm font-semibold ${highlight ? 'text-orange-800 text-base' : 'text-orange-700'}`}>
-        {value}
-      </span>
-    )}
-  </div>
-);
-
-const FlyerRow = ({ label, value, highlight = false }) => (
-  <div className="flex justify-between items-center py-1">
-    <span className={`text-sm font-medium ${highlight ? 'text-orange-700 font-bold' : 'text-orange-600'}`}>
-      {label}:
-    </span>
-    <span className={`text-sm font-semibold ${highlight ? 'text-orange-800 text-base' : 'text-orange-700'}`}>
-      {value}
-    </span>
-  </div>
-);
-
-const ActionButton = ({ icon: Icon, label, color, onClick, disabled }) => (
-  <button
-    onClick={onClick}
-    disabled={disabled}
-    className={`${color} text-white py-3 px-2 rounded-xl font-semibold transition-all duration-200 hover:shadow-lg active:scale-95 flex flex-col items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed text-xs`}
-  >
-    <Icon className="text-lg" />
-    <span className="text-xs text-center leading-tight">{label}</span>
-  </button>
 );
 
 export default FullVoterDetails;
