@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-// Firebase exports assumed to come from ../Firebase/config (user should add the firebase snippet there)
+// Firebase exports assumed to come from ../Firebase/config
 import { db, ref, get, set, update } from '../Firebase/config';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
@@ -10,12 +10,9 @@ import { FiArrowLeft, FiDownload, FiPrinter, FiMessageCircle, FiMail, FiHash, Fi
 import { FaWhatsapp, FaRegFilePdf } from 'react-icons/fa';
 import { GiVote } from 'react-icons/gi';
 
-// This component now:
-// - removes the candidate block entirely
-// - uses Firebase (db) to load voters in chunks for the Family modal (loadVotersInChunks)
-// - shows searchable voter list and Add button in the Family modal
-// - shows two Info helper lists: voters with same booth, voters with same polling address
-// - Survey tab shows inputs similar to Info but editable and initially empty if not present
+// Features added in this update:
+// 1) Family: ability to Remove a family member and View full details of a member (modal)
+// 2) Survey: shows input fields for "info" attributes that are missing in the voter record
 
 const FullVoterDetails = () => {
   const { voterId } = useParams();
@@ -24,13 +21,17 @@ const FullVoterDetails = () => {
   const [voter, setVoter] = useState(null);
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
-  const [activeTab, setActiveTab] = useState('info'); // 'info' | 'family' | 'survey'
+  const [activeTab, setActiveTab] = useState('info');
 
   // family UI
   const [allVoters, setAllVoters] = useState([]);
   const [familyModalOpen, setFamilyModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [addingFamily, setAddingFamily] = useState(false);
+
+  // member detail modal
+  const [memberDetailOpen, setMemberDetailOpen] = useState(false);
+  const [memberDetail, setMemberDetail] = useState(null);
 
   // for same-booth / same-address lists
   const [sameBoothOpen, setSameBoothOpen] = useState(false);
@@ -41,7 +42,16 @@ const FullVoterDetails = () => {
   // survey fields local
   const [surveyData, setSurveyData] = useState({ phone: '', dob: '', village: '', address: '' });
 
-  // Derived filtered list for family modal (hook order must remain stable)
+  // info fields we consider important
+  const infoFields = [
+    { key: 'village', label: 'Village' },
+    { key: 'taluka', label: 'Taluka' },
+    { key: 'houseNumber', label: 'House No' },
+    { key: 'pollingStationAddress', label: 'Polling Station Address' },
+    { key: 'pollingStation', label: 'Polling Station' }
+  ];
+
+  // Derived filtered list for family modal
   const filteredVoters = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
     if (!q) return allVoters.filter(v => v.id !== (voter && voter.id));
@@ -95,7 +105,6 @@ const FullVoterDetails = () => {
     const list = [];
     try {
       if (!db) {
-        // fallback: read localStorage voters
         Object.keys(localStorage).forEach((k) => {
           if (k.startsWith('voter_')) {
             try { list.push(JSON.parse(localStorage.getItem(k))); } catch (e){}
@@ -116,7 +125,7 @@ const FullVoterDetails = () => {
               id: childSnap.key,
               name: raw.name || raw.Name || '',
               voterId: raw.voterId || raw.VoterId || '',
-              boothNumber: raw.boothNumber || raw.booth || raw.boothNumber,
+              boothNumber: raw.boothNumber || raw.booth,
               pollingStationAddress: raw.pollingStationAddress || raw.pollingStation || raw.address || ''
             });
             count++;
@@ -170,17 +179,51 @@ const FullVoterDetails = () => {
     } finally { setAddingFamily(false); }
   };
 
+  const removeFamilyMember = async (memberId) => {
+    if (!voter) return;
+    if (!Array.isArray(voter.family)) return;
+    const family = voter.family.filter(m => m.id !== memberId);
+    const updated = { ...voter, family };
+    setVoter(updated);
+    await persistVoter(updated);
+    try { await update(ref(db, `voters/${voter.id}`), { family }); } catch(e){}
+    alert('Family member removed');
+  };
+
+  const fetchMemberDetails = async (memberId) => {
+    setMemberDetail(null);
+    try {
+      if (db) {
+        const snap = await get(ref(db, `voters/${memberId}`));
+        if (snap && snap.exists()) {
+          setMemberDetail({ id: memberId, ...snap.val() });
+          setMemberDetailOpen(true);
+          return;
+        }
+      }
+      // fallback to localStorage
+      const saved = localStorage.getItem(`voter_${memberId}`);
+      if (saved) {
+        setMemberDetail(JSON.parse(saved));
+        setMemberDetailOpen(true);
+        return;
+      }
+      alert('Member details not found');
+    } catch (err) {
+      console.error('fetchMemberDetails', err);
+      alert('Error fetching member details');
+    }
+  };
+
   // get lists for Info helpers
   const computeSameBooth = async () => {
     if (!voter) return;
-    // prefer to filter from allVoters if available
     if (allVoters && allVoters.length) {
       const list = allVoters.filter(v => v.boothNumber && voter.boothNumber && v.boothNumber === voter.boothNumber && v.id !== voter.id);
       setSameBoothList(list);
       setSameBoothOpen(true);
       return;
     }
-    // fallback: scan DB (careful with large sets) - here we attempt a read and filter
     try {
       const votersRef = ref(db, 'voters');
       const snap = await get(votersRef);
@@ -225,17 +268,19 @@ const FullVoterDetails = () => {
     } catch (err) { console.error('computeSameAddress', err); }
   };
 
-  const saveSurvey = async () => {
+  const saveSurvey = async (extraInfo = {}) => {
     if (!voter) return;
-    const updated = { ...voter, phone: surveyData.phone, dob: surveyData.dob, village: surveyData.village, address: surveyData.address };
-    setVoter(updated);
-    await persistVoter(updated);
-    try { await update(ref(db, `voters/${voter.id}`), { phone: surveyData.phone, dob: surveyData.dob, village: surveyData.village, address: surveyData.address }); } catch(e){}
+    // Merge surveyData and any filled info fields
+    const merged = { ...voter, ...extraInfo, phone: surveyData.phone, dob: surveyData.dob, village: surveyData.village, address: surveyData.address };
+    setVoter(merged);
+    await persistVoter(merged);
+    try { await update(ref(db, `voters/${voter.id}`), merged); } catch(e){}
     alert('Survey saved');
   };
 
   // --- share/download/print preserved ---
-  const generateWhatsAppMessage = () => `Voter: ${voter?.name || ''}\nVoter ID: ${voter?.voterId || ''}`;
+  const generateWhatsAppMessage = () => `Voter: ${voter?.name || ''}
+Voter ID: ${voter?.voterId || ''}`;
   const shareOnWhatsApp = async () => {
     const message = generateWhatsAppMessage();
     const el = document.getElementById('voter-receipt');
@@ -249,6 +294,9 @@ const FullVoterDetails = () => {
 
   if (loading) return (<div className="min-h-screen flex items-center justify-center p-4">Loading...</div>);
   if (!voter) return (<div className="min-h-screen flex items-center justify-center p-4"><div>Voter not found<button onClick={()=>navigate('/')}>Back</button></div></div>);
+
+  // Determine which info fields are missing and show them in survey
+  const missingInfoFields = infoFields.filter(f => !voter[f.key] || voter[f.key] === '');
 
   return (
     <div className="min-h-screen bg-[#fff7ef] p-4 pb-28">
@@ -283,10 +331,7 @@ const FullVoterDetails = () => {
             <div className="mt-4 border-t pt-3">
               {activeTab === 'info' && (
                 <div className="grid grid-cols-1 gap-3 text-sm">
-                  <Detail label="Village" value={voter.village || voter.town || voter.locality || '-'} />
-                  <Detail label="Taluka" value={voter.taluka || '-'} />
-                  <Detail label="Voter Card" value={voter.voterId || '-'} highlight />
-                  <Detail label="House No" value={voter.houseNumber || '-'} />
+                  {infoFields.map(f => <Detail key={f.key} label={f.label} value={voter[f.key] || '-'} />)}
 
                   <div className="bg-gray-50 p-3 rounded">
                     <div className="text-xs text-gray-600">Address</div>
@@ -318,7 +363,10 @@ const FullVoterDetails = () => {
                         {voter.family.map((m) => (
                           <li key={m.id} className="flex justify-between items-center">
                             <div className="text-sm">{m.name}</div>
-                            <div className="text-xs text-gray-500">{m.id}</div>
+                            <div className="flex items-center gap-2">
+                              <button onClick={()=>fetchMemberDetails(m.id)} className="text-sm bg-blue-500 text-white px-2 py-1 rounded">View</button>
+                              <button onClick={()=>removeFamilyMember(m.id)} className="text-sm bg-red-500 text-white px-2 py-1 rounded">Remove</button>
+                            </div>
                           </li>
                         ))}
                       </ul>
@@ -331,7 +379,8 @@ const FullVoterDetails = () => {
 
               {activeTab === 'survey' && (
                 <div className="space-y-3">
-                  <div className="text-sm font-medium">Edit Survey Details</div>
+                  <div className="text-sm font-medium">Edit Survey Details (also fill missing Info fields)</div>
+
                   <div className="grid grid-cols-1 gap-2">
                     <label className="text-xs">Phone</label>
                     <input value={surveyData.phone} onChange={(e)=>setSurveyData(s=>({...s, phone: e.target.value}))} className="p-2 border rounded" />
@@ -339,14 +388,38 @@ const FullVoterDetails = () => {
                     <label className="text-xs">Date of Birth</label>
                     <input type="date" value={surveyData.dob} onChange={(e)=>setSurveyData(s=>({...s, dob: e.target.value}))} className="p-2 border rounded" />
 
-                    <label className="text-xs">Village</label>
-                    <input value={surveyData.village} onChange={(e)=>setSurveyData(s=>({...s, village: e.target.value}))} className="p-2 border rounded" />
+                    {/* Show the missing info fields only */}
+             {missingInfoFields.length ? (
+  missingInfoFields.map((f) => {
+    return (
+      <div key={f.key}>
+        <label className="text-xs">{f.label}</label>
+        <input
+          value={surveyData && surveyData[f.key] !== undefined ? surveyData[f.key] : ''}
+          onChange={(e) => setSurveyData(s => ({ ...s, [f.key]: e.target.value }))}
+          className="p-2 border rounded"
+        />
+      </div>
+    );
+  })
+) : (
+  <div className="text-sm text-gray-500">
+    No missing info fields. You can still update phone or dob.
+  </div>
+)}
+
 
                     <label className="text-xs">Address</label>
                     <textarea value={surveyData.address} onChange={(e)=>setSurveyData(s=>({...s, address: e.target.value}))} className="p-2 border rounded" rows={3} />
 
                     <div className="flex gap-2">
-                      <button onClick={saveSurvey} className="bg-green-600 text-white px-4 py-2 rounded">Save</button>
+                      <button onClick={() => {
+                        // create an object of filled info fields from surveyData for keys that were missing
+                        const extra = {};
+                        missingInfoFields.forEach(f => { if (surveyData[f.key]) extra[f.key] = surveyData[f.key]; });
+                        saveSurvey(extra);
+                      }} className="bg-green-600 text-white px-4 py-2 rounded">Save</button>
+
                       <button onClick={() => { setSurveyData({ phone: voter.phone || '', dob: voter.dob || '', village: voter.village || '', address: voter.address || '' }); }} className="bg-gray-200 px-4 py-2 rounded">Reset</button>
                     </div>
                   </div>
@@ -412,6 +485,32 @@ const FullVoterDetails = () => {
           </div>
         )}
 
+        {/* Member detail modal */}
+        {memberDetailOpen && memberDetail && (
+          <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-lg w-full max-w-md p-4 shadow-lg">
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-lg font-bold">Member Details</div>
+                <button onClick={() => setMemberDetailOpen(false)} className="p-2"><FiX /></button>
+              </div>
+
+              <div className="space-y-2 text-sm">
+                <div><strong>Name:</strong> {memberDetail.name}</div>
+                <div><strong>Voter ID:</strong> {memberDetail.voterId || memberDetail.id}</div>
+                <div><strong>Age:</strong> {memberDetail.age || '-'}</div>
+                <div><strong>Gender:</strong> {memberDetail.gender || '-'}</div>
+                <div><strong>Village:</strong> {memberDetail.village || '-'}</div>
+                <div><strong>Taluka:</strong> {memberDetail.taluka || '-'}</div>
+                <div><strong>Address:</strong> {memberDetail.address || memberDetail.pollingStationAddress || '-'}</div>
+              </div>
+
+              <div className="mt-4 text-right">
+                <button onClick={()=>setMemberDetailOpen(false)} className="px-4 py-2 rounded bg-gray-200">Close</button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Same Booth Modal */}
         {sameBoothOpen && (
           <div className="fixed inset-0 bg-black/40 z-40 flex items-center justify-center p-4">
@@ -446,7 +545,7 @@ const FullVoterDetails = () => {
                     <div><div className="font-semibold">{v.name}</div><div className="text-xs text-gray-500">{v.voterId}</div></div>
                     <div className="text-xs text-gray-500">{v.id}</div>
                   </div>
-                )) : (<div className="text-sm text-gray-500">No voter found</div>)}
+                )) : (<div className="text-sm text-gray-500">No voters found</div>)}
               </div>
             </div>
           </div>
