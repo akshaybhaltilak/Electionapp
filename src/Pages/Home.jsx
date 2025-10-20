@@ -1,24 +1,20 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
+import { db, ref, set as dbSet, onValue, off } from '../Firebase/config';
 import { useNavigate } from 'react-router-dom';
 
 const LOCAL_STORAGE_KEY = 'janetaa_home_branding_v1';
 
 const defaultBranding = {
-  // Compact card
-  
-  // Top hero banner shown during initial load
-  bannerUrl: '/bannerstarting.jpg',
-  // Enhanced card
-  leaderImageUrl: '/banner2.png',
-  leaderName: 'Vinod Murlidhar Mapari',
-  leaderTagline:
-    'Akola Mahanagarpalika 2025 Sarvatrik Nivadanuak Prabhag Kr. 20 che Adhikrut Umedvaar',
-  slogan: "Your Vote, Your Voice - Let's Build Together!",
-  cta1: 'Vote Now',
-  cta2: 'Share',
-  // new fields
-  serialNumber: 'S-001',
-  signImageUrl: 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png',
+  // start empty - nothing shown until user configures branding
+  bannerUrl: '',
+  leaderImageUrl: '',
+  leaderName: '',
+  leaderTagline: '',
+  slogan: '',
+  cta1: '',
+  cta2: '',
+  serialNumber: '',
+  signImageUrl: '',
   // quick stats (top compact card)
   // quickStats: [
   //   { value: '10K+', label: 'Voters' },
@@ -32,7 +28,7 @@ const defaultBranding = {
 const Home = () => {
   const navigate = useNavigate();
   // removed transient splash/banner - showBranding and timer not needed
-  const [showBranding, setShowBranding] = useState(false);
+  // removed transient splash/banner - no showBranding state needed
   const [editMode, setEditMode] = useState(false);
   const [branding, setBranding] = useState(defaultBranding);
   const [workingCopy, setWorkingCopy] = useState(null);
@@ -52,7 +48,47 @@ const Home = () => {
       // ignore invalid stored value
       console.warn('Failed to load branding from localStorage', e);
     }
+    // realtime sync: subscribe to remote branding changes
+  const remoteRef = ref(db, 'branding/current');
+  try {
+    const callback = (snapshot) => {
+      const remote = snapshot.val();
+      if (remote) {
+        try {
+          setBranding(remote);
+          setLastSavedBranding(remote);
+          // if user is editing, update working copy too for realtime preview
+          setWorkingCopy((prev) => (prev ? { ...prev, ...remote } : null));
+          // also sync to localStorage so other tabs pick it up
+          localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(remote));
+        } catch (e) {
+          console.warn('Failed to apply remote branding', e);
+        }
+      }
+    };
+
+    onValue(remoteRef, callback);
+    // cleanup
+    return () => off(remoteRef, 'value', callback);
+  } catch (e) {
+    console.warn('Realtime DB not available or subscription failed', e);
+  }
   }, []);
+
+  // Debounced remote write: keep a ref for latest timer
+  const writeTimer = useRef(null);
+  const writeRemoteBranding = (data) => {
+    // debounce 800ms
+    if (writeTimer.current) clearTimeout(writeTimer.current);
+    writeTimer.current = setTimeout(() => {
+      try {
+        const remoteRef2 = ref(db, 'branding/current');
+        dbSet(remoteRef2, data);
+      } catch (e) {
+        console.warn('Failed to write branding to remote DB', e);
+      }
+    }, 800);
+  };
 
   // Autosave whenever workingCopy changes (so page refresh preserves in-progress edits)
   useEffect(() => {
@@ -62,6 +98,8 @@ const Home = () => {
       // update live branding and lastSavedBranding as autosave
       setBranding(workingCopy);
       setLastSavedBranding(workingCopy);
+      // push to remote DB for realtime sync
+      try { writeRemoteBranding(workingCopy); } catch (e) { /* ignore */ }
     } catch (e) {
       console.warn('Failed to autosave branding to localStorage', e);
     }
@@ -156,6 +194,7 @@ const Home = () => {
     setBranding(defaultBranding);
     try {
       localStorage.removeItem(LOCAL_STORAGE_KEY);
+      try { writeRemoteBranding(defaultBranding); } catch (e) { console.warn('Remote reset failed', e); }
     } catch (e) {
       console.warn('Failed to remove branding from localStorage', e);
     }
@@ -169,6 +208,7 @@ const Home = () => {
     try {
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(toSave));
       setLastSavedBranding(toSave);
+      try { writeRemoteBranding(toSave); } catch (e) { console.warn('Remote write failed', e); }
     } catch (e) {
       console.warn('Failed to save branding to localStorage', e);
     }
@@ -289,8 +329,9 @@ const Home = () => {
         ))}
       </div>
 
-      {/* Enhanced Political Branding Section - Single Attractive Card */}
-      <div className="mt-4 bg-gradient-to-br from-orange-500 to-red-600 rounded-3xl shadow-2xl overflow-hidden max-w-md mx-auto border-4 border-white/30 transform hover:scale-[1.01] transition-all duration-300">
+  {/* Enhanced Political Branding Section - Single Attractive Card */}
+  { (active.leaderName || active.bannerUrl || active.slogan || active.serialNumber) ? (
+  <div className="mt-4 bg-gradient-to-br from-orange-500 to-red-600 rounded-3xl shadow-2xl overflow-hidden max-w-md mx-auto border-4 border-white/30 transform hover:scale-[1.01] transition-all duration-300">
         <div className="flex h-auto">
           {/* Left Side - Politician Image (40%) */}
           <div className="w-4/10 flex-shrink-0 relative">
@@ -299,8 +340,9 @@ const Home = () => {
               src={active.leaderImageUrl}
               alt="Political Leader"
               className="w-full h-full object-cover"
-              onError={(e) => {
-                e.target.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='192' viewBox='0 0 120 192'%3E%3Crect width='120' height='192' fill='%23fed7aa'/%3E%3Ccircle cx='60' cy='70' r='30' fill='%23fdba74'/%3E%3Crect x='45' y='110' width='30' height='60' fill='%23fdba74'/%3E%3C/svg%3E";
+              onError={(_evt) => {
+                /* fallback placeholder image */
+                _evt.target.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='192' viewBox='0 0 120 192'%3E%3Crect width='120' height='192' fill='%23fed7aa'/%3E%3Ccircle cx='60' cy='70' r='30' fill='%23fdba74'/%3E%3Crect x='45' y='110' width='30' height='60' fill='%23fdba74'/%3E%3C/svg%3E";
               }}
             />
             {editMode && (
@@ -391,6 +433,12 @@ const Home = () => {
           </div>
         </div>
       </div>
+      ) : (
+        <div className="mt-4 max-w-md mx-auto p-6 bg-white rounded-2xl border border-gray-200 text-center">
+          <div className="text-gray-500 mb-3">No branding configured yet.</div>
+          <button onClick={startEditing} className="bg-orange-600 text-white px-4 py-2 rounded-lg">Edit Branding</button>
+        </div>
+      )}
 
       {/* Call to Action */}
       
