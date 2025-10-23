@@ -56,9 +56,7 @@ const FullVoterDetails = () => {
     name: "RAJESH KUMAR",
     party: "BHARATIYA JANTA PARTY",
     electionSymbol: "LOTUS",
-    slogan: "सबका साथ, सबका विकास",
-    contact: "98765-43210",
-    area: "GANDHINAGAR CONSTITUENCY"
+    
   };
 
   // Derived filtered list for family modal
