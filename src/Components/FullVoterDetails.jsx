@@ -288,335 +288,261 @@ Voter ID: ${voter?.voterId || ''}`;
   const downloadAsImage = async () => { setDownloading(true); try { const el = document.getElementById('voter-receipt'); const canvas = await html2canvas(el, { scale: 3, backgroundColor: '#fff', useCORS: true }); const image = canvas.toDataURL('image/png'); const link = document.createElement('a'); link.href = image; link.download = `voter-${voter?.voterId || 'receipt'}.png`; document.body.appendChild(link); link.click(); document.body.removeChild(link); } catch(e){ console.error(e); alert('Error'); } finally{ setDownloading(false); } };
   const downloadAsPDF = async () => { setDownloading(true); try { const el = document.getElementById('voter-receipt'); const canvas = await html2canvas(el, { scale: 2, backgroundColor: '#fff', useCORS: true }); const imgWidth = 210; const imgHeight = (canvas.height * imgWidth) / canvas.width; const pdf = new jsPDF('p','mm','a4'); pdf.addImage(canvas.toDataURL('image/png'),'PNG',0,0,imgWidth,imgHeight); pdf.save(`voter-${voter?.voterId || 'receipt'}.pdf`); } catch(e){ console.error(e); alert('Error'); } finally{ setDownloading(false); } };
   
-  // Enhanced Bluetooth Printer Compatible Print Function
-  const printVoterDetails = () => {
+  // RPD-588 Thermal Printer Specific Functions
+  const printForRPD588 = async () => {
     setPrinting(true);
     try {
-      // Create a print-optimized version of the receipt
-      const printContent = `
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <title>Voter Receipt - ${voter?.name || 'Voter'}</title>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <style>
-              @media print {
-                @page {
-                  margin: 0;
-                  padding: 0;
-                  size: auto;
-                }
-                body {
-                  margin: 0;
-                  padding: 5mm;
-                  font-family: 'Courier New', monospace;
-                  font-size: 10px;
-                  line-height: 1.2;
-                  color: #000;
-                  background: white;
-                  width: 100%;
-                }
-                * {
-                  box-sizing: border-box;
-                }
-                .receipt-container {
-                  width: 100%;
-                  max-width: 80mm;
-                  margin: 0 auto;
-                  padding: 0;
-                }
-                .header {
-                  text-align: center;
-                  border-bottom: 1px solid #000;
-                  padding-bottom: 3px;
-                  margin-bottom: 5px;
-                }
-                .title {
-                  font-size: 12px;
-                  font-weight: bold;
-                  margin: 0;
-                  text-transform: uppercase;
-                }
-                .subtitle {
-                  font-size: 8px;
-                  margin: 0;
-                  color: #666;
-                }
-                .voter-name {
-                  font-size: 11px;
-                  font-weight: bold;
-                  text-align: center;
-                  margin: 5px 0;
-                  text-transform: uppercase;
-                }
-                .voter-meta {
-                  display: flex;
-                  flex-wrap: wrap;
-                  justify-content: space-between;
-                  font-size: 8px;
-                  margin-bottom: 5px;
-                  gap: 2px;
-                }
-                .voter-meta div {
-                  flex: 1;
-                  min-width: 45%;
-                }
-                .voted-badge {
-                  text-align: center;
-                  font-weight: bold;
-                  font-size: 9px;
-                  margin: 5px 0;
-                  padding: 2px;
-                  border: 1px solid #000;
-                  background: #f0f0f0;
-                  text-transform: uppercase;
-                }
-                .detail-section {
-                  margin: 5px 0;
-                }
-                .detail-row {
-                  display: flex;
-                  justify-content: space-between;
-                  margin: 2px 0;
-                  padding: 1px 0;
-                  border-bottom: 1px dotted #ccc;
-                }
-                .detail-label {
-                  font-weight: bold;
-                  min-width: 35mm;
-                }
-                .detail-value {
-                  text-align: right;
-                  flex: 1;
-                  margin-left: 2mm;
-                  word-break: break-word;
-                }
-                .family-section {
-                  margin-top: 5px;
-                }
-                .family-title {
-                  font-weight: bold;
-                  margin-bottom: 3px;
-                  border-bottom: 1px solid #000;
-                  padding-bottom: 1px;
-                }
-                .family-member {
-                  display: flex;
-                  justify-content: space-between;
-                  margin: 1px 0;
-                  font-size: 8px;
-                }
-                .footer {
-                  text-align: center;
-                  margin-top: 8px;
-                  padding-top: 3px;
-                  border-top: 1px solid #000;
-                  font-size: 7px;
-                  color: #666;
-                }
-                .separator {
-                  border-top: 1px dashed #000;
-                  margin: 3px 0;
-                }
-                .no-print {
-                  display: none !important;
-                }
-              }
-              
-              @media screen {
-                body {
-                  font-family: Arial, sans-serif;
-                  margin: 10px;
-                  background: #f5f5f5;
-                }
-                .receipt-container {
-                  max-width: 80mm;
-                  margin: 0 auto;
-                  border: 1px solid #ccc;
-                  padding: 10px;
-                  background: white;
-                  box-shadow: 0 0 10px rgba(0,0,0,0.1);
-                }
-              }
-            </style>
-          </head>
-          <body>
-            <div class="receipt-container">
-              <div class="header">
-                <div class="title">VOTER DETAILS RECEIPT</div>
-                <div class="subtitle">VoterData Pro - Official Record</div>
-              </div>
-              
-              <div class="voter-name">${voter?.name || 'N/A'}</div>
-              
-              <div class="voter-meta">
-                <div><strong>Voter ID:</strong> ${voter?.voterId || 'N/A'}</div>
-                <div><strong>Part:</strong> ${voter?.listPart || voter?.part || '1'}</div>
-                <div><strong>Age:</strong> ${voter?.age || '-'}</div>
-                <div><strong>Gender:</strong> ${voter?.gender || '-'}</div>
-              </div>
-
-              ${voter?.voted ? '<div class="voted-badge">✓ VOTED - ELECTION COMPLETED</div>' : ''}
-
-              <div class="detail-section">
-                ${infoFields.map(f => `
-                  <div class="detail-row">
-                    <span class="detail-label">${f.label}:</span>
-                    <span class="detail-value">${voter?.[f.key] || '-'}</span>
-                  </div>
-                `).join('')}
-                
-                <div class="detail-row">
-                  <span class="detail-label">Address:</span>
-                  <span class="detail-value">${voter?.pollingStationAddress || voter?.address || '-'}</span>
-                </div>
-                
-                <div class="detail-row">
-                  <span class="detail-label">Polling Station:</span>
-                  <span class="detail-value">${voter?.pollingStation || voter?.pollingStationAddress || '-'}</span>
-                </div>
-              </div>
-
-              ${Array.isArray(voter?.family) && voter.family.length > 0 ? `
-                <div class="family-section">
-                  <div class="family-title">Family Members (${voter.family.length}):</div>
-                  ${voter.family.map((m, index) => `
-                    <div class="family-member">
-                      <span>${index + 1}. ${m.name}</span>
-                      <span>ID: ${m.id.substring(0, 8)}...</span>
-                    </div>
-                  `).join('')}
-                </div>
-              ` : ''}
-
-              <div class="separator"></div>
-
-              <div class="footer">
-                <div>Generated: ${new Date().toLocaleDateString('en-IN')} ${new Date().toLocaleTimeString('en-IN', {hour: '2-digit', minute:'2-digit'})}</div>
-                <div>VoterData Pro System</div>
-              </div>
-            </div>
-
-            <script>
-              // Auto-print and close for Bluetooth printers
-              setTimeout(() => {
-                window.print();
-                
-                // Close window after print (with delay for Bluetooth printers)
-                setTimeout(() => {
-                  window.close();
-                }, 1000);
-              }, 500);
-            </script>
-          </body>
-        </html>
-      `;
-
-      // Open print window
-      const printWindow = window.open('', '_blank', 'width=400,height=600');
-      if (!printWindow) {
-        alert('Please allow popups for printing. Then try again.');
-        setPrinting(false);
+      // Method 1: Direct USB Printing (for Android/iOS with printer connected)
+      if (navigator.usb && navigator.usb.requestDevice) {
+        await printViaWebUSB();
         return;
       }
 
-      printWindow.document.write(printContent);
-      printWindow.document.close();
+      // Method 2: Bluetooth Printing
+      if (navigator.bluetooth) {
+        await printViaBluetooth();
+        return;
+      }
 
-      // Fallback: if window doesn't close automatically, show manual instructions
-      setTimeout(() => {
-        if (!printWindow.closed) {
-          const userConfirmed = confirm(
-            'Print window opened. Please select your Bluetooth printer from the print dialog.\n\n' +
-            'If print dialog didn\'t appear, check:\n' +
-            '1. Bluetooth printer is connected & paired\n' +
-            '2. Try manual print (Ctrl+P)\n\n' +
-            'Close this window when done?'
-          );
-          if (userConfirmed) {
-            printWindow.close();
-          }
-        }
-        setPrinting(false);
-      }, 3000);
+      // Method 3: Traditional Print Dialog (Fallback)
+      await traditionalPrint();
 
     } catch (error) {
       console.error('Print error:', error);
-      alert('Printing failed. Please try again or use PDF export.');
+      alert(`Printing failed: ${error.message}. Trying alternative method...`);
+      // Fallback to traditional print
+      await traditionalPrint();
+    } finally {
       setPrinting(false);
     }
   };
 
-  // Alternative simple print for thermal printers
-  const simplePrint = () => {
-    setPrinting(true);
-    try {
-      const simpleContent = `
-        VOTER DETAILS RECEIPT
-        =====================
-        Name: ${voter?.name || 'N/A'}
-        Voter ID: ${voter?.voterId || 'N/A'}
-        Part: ${voter?.listPart || voter?.part || '1'}
-        Age: ${voter?.age || '-'} | Gender: ${voter?.gender || '-'}
-        ${voter?.voted ? '✓ VOTED - ELECTION COMPLETED' : ''}
-        ---------------------
-        Village: ${voter?.village || '-'}
-        Taluka: ${voter?.taluka || '-'}
-        House No: ${voter?.houseNumber || '-'}
-        Address: ${voter?.address || voter?.pollingStationAddress || '-'}
-        Polling Station: ${voter?.pollingStation || '-'}
-        ---------------------
-        ${Array.isArray(voter?.family) && voter.family.length > 0 ? 
-          `Family Members:\n${voter.family.map((m, i) => ` ${i+1}. ${m.name}`).join('\n')}\n---------------------\n` : ''}
-        Generated: ${new Date().toLocaleDateString('en-IN')}
-        VoterData Pro System
-        =====================
-      `;
-
-      const printWindow = window.open('', '_blank', 'width=400,height=600');
-      if (!printWindow) {
-        alert('Please allow popups for printing');
-        setPrinting(false);
-        return;
-      }
-
-      printWindow.document.write(`
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <title>Print Voter Receipt</title>
-            <style>
-              body {
-                font-family: 'Courier New', monospace;
-                font-size: 12px;
-                white-space: pre-wrap;
-                margin: 10px;
-                line-height: 1.2;
-              }
-              @media print {
-                body { margin: 0; font-size: 10px; }
-              }
-            </style>
-          </head>
-          <body>
-            <pre>${simpleContent}</pre>
-            <script>
-              setTimeout(() => {
-                window.print();
-                setTimeout(() => window.close(), 1000);
-              }, 500);
-            </script>
-          </body>
-        </html>
-      `);
-      printWindow.document.close();
-      
-      setTimeout(() => setPrinting(false), 2000);
-    } catch (error) {
-      console.error('Simple print error:', error);
-      setPrinting(false);
+  // Traditional Print Dialog
+  const traditionalPrint = async () => {
+    const receiptContent = generateReceiptContent();
+    
+    const printWindow = window.open('', '_blank', 'width=320,height=480');
+    if (!printWindow) {
+      alert('Please allow popups for printing. Then try the print button again.');
+      return;
     }
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Print Voter Receipt</title>
+          <meta charset="utf-8">
+          <style>
+            @media print {
+              @page { margin: 0; padding: 0; size: 80mm auto; }
+              body { 
+                margin: 2mm; 
+                padding: 0; 
+                font-family: 'Courier New', monospace;
+                font-size: 9px;
+                line-height: 1;
+                width: 76mm;
+              }
+              * { box-sizing: border-box; }
+              .line { margin: 1px 0; }
+              .center { text-align: center; }
+              .bold { font-weight: bold; }
+              .underline { text-decoration: underline; }
+              .double { font-size: 11px; font-weight: bold; }
+              .separator { border-bottom: 1px dashed #000; margin: 2px 0; }
+              .cut { 
+                border-bottom: 1px dashed #000; 
+                margin: 5px 0; 
+                text-align: center;
+                font-size: 8px;
+              }
+            }
+            body { 
+              font-family: 'Courier New', monospace;
+              font-size: 9px;
+              margin: 5mm;
+              line-height: 1;
+            }
+          </style>
+        </head>
+        <body>
+          <pre>${receiptContent}</pre>
+          <div class="cut">--- CUT HERE ---</div>
+          <script>
+            setTimeout(() => {
+              window.print();
+              setTimeout(() => {
+                window.close();
+              }, 1000);
+            }, 500);
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
+  // Generate ESC/POS compatible receipt content
+  const generateReceiptContent = () => {
+    const lines = [];
+    
+    // Header
+    lines.push('═'.repeat(42));
+    lines.push('        VOTER DETAILS RECEIPT');
+    lines.push('═'.repeat(42));
+    lines.push('');
+    
+    // Voter Information
+    lines.push(`NAME:    ${voter?.name || 'N/A'}`);
+    lines.push(`ID:      ${voter?.voterId || 'N/A'}`);
+    lines.push(`PART:    ${voter?.listPart || voter?.part || '1'}`);
+    lines.push(`AGE:     ${voter?.age || '-'}    GENDER: ${voter?.gender || '-'}`);
+    lines.push('');
+    
+    // Voted Status
+    if (voter?.voted) {
+      lines.push('══════════════════════════════════════════');
+      lines.push('           ✓ VOTED - COMPLETED');
+      lines.push('══════════════════════════════════════════');
+      lines.push('');
+    }
+    
+    // Details
+    lines.push('─'.repeat(42));
+    lines.push('DETAILS:');
+    lines.push('─'.repeat(42));
+    
+    infoFields.forEach(field => {
+      const value = voter?.[field.key] || '-';
+      if (value && value !== '-') {
+        const label = field.label.padEnd(12, ' ');
+        lines.push(`${label}: ${value}`);
+      }
+    });
+    
+    // Address
+    const address = voter?.pollingStationAddress || voter?.address;
+    if (address) {
+      lines.push('');
+      lines.push('ADDRESS:');
+      lines.push(address);
+    }
+    
+    // Polling Station
+    const pollingStation = voter?.pollingStation;
+    if (pollingStation) {
+      lines.push('');
+      lines.push('POLLING STATION:');
+      lines.push(pollingStation);
+    }
+    
+    // Family Members
+    if (Array.isArray(voter?.family) && voter.family.length > 0) {
+      lines.push('');
+      lines.push('─'.repeat(42));
+      lines.push(`FAMILY MEMBERS (${voter.family.length}):`);
+      lines.push('─'.repeat(42));
+      voter.family.forEach((member, index) => {
+        lines.push(`${(index + 1).toString().padStart(2, ' ')}. ${member.name}`);
+      });
+    }
+    
+    // Footer
+    lines.push('');
+    lines.push('─'.repeat(42));
+    lines.push(`Generated: ${new Date().toLocaleDateString('en-IN')}`);
+    lines.push(`Time: ${new Date().toLocaleTimeString('en-IN', { 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    })}`);
+    lines.push('VoterData Pro System');
+    lines.push('═'.repeat(42));
+    
+    return lines.join('\n');
+  };
+
+  // Web USB Printing (for direct USB connection)
+  const printViaWebUSB = async () => {
+    try {
+      const device = await navigator.usb.requestDevice({
+        filters: [{ vendorId: 0x6868 }] // Common thermal printer vendor ID
+      });
+      
+      await device.open();
+      await device.selectConfiguration(1);
+      await device.claimInterface(0);
+      
+      const encoder = new TextEncoder();
+      const receiptText = generateReceiptContent();
+      const data = encoder.encode(receiptText + '\x1B@\x1Bm'); // ESC/POS commands
+      
+      await device.transferOut(1, data);
+      await device.close();
+      
+      alert('Receipt sent to printer successfully!');
+    } catch (error) {
+      console.error('USB printing failed:', error);
+      throw new Error('USB printing not available');
+    }
+  };
+
+  // Bluetooth Printing
+  const printViaBluetooth = async () => {
+    try {
+      const device = await navigator.bluetooth.requestDevice({
+        filters: [
+          { name: 'RPD588' },
+          { name: 'RP-588' },
+          { name: 'Thermal' },
+          { services: ['generic_access'] }
+        ]
+      });
+      
+      const server = await device.gatt.connect();
+      const service = await server.getPrimaryService('generic_access');
+      const characteristic = await service.getCharacteristic('device_name');
+      
+      const encoder = new TextEncoder();
+      const receiptText = generateReceiptContent();
+      const data = encoder.encode(receiptText);
+      
+      await characteristic.writeValue(data);
+      alert('Receipt sent to Bluetooth printer!');
+    } catch (error) {
+      console.error('Bluetooth printing failed:', error);
+      throw new Error('Bluetooth printing failed');
+    }
+  };
+
+  // Simple text-based print for maximum compatibility
+  const simpleThermalPrint = () => {
+    setPrinting(true);
+    
+    const receiptText = generateReceiptContent();
+    
+    // Create a simple text area for copying
+    const textArea = document.createElement('textarea');
+    textArea.value = receiptText;
+    document.body.appendChild(textArea);
+    textArea.select();
+    
+    try {
+      // Try to copy to clipboard
+      const successful = document.execCommand('copy');
+      if (successful) {
+        alert('Receipt copied to clipboard! You can now paste it into any text editor or printing software.');
+      } else {
+        // Fallback: show text in alert for manual copy
+        alert(`Please copy this text and print it:\n\n${receiptText}`);
+      }
+    } catch (err) {
+      // Final fallback
+      alert(`Please copy this text manually:\n\n${receiptText}`);
+    }
+    
+    document.body.removeChild(textArea);
+    setPrinting(false);
   };
 
   if (loading) return (<div className="min-h-screen flex items-center justify-center p-4">Loading...</div>);
@@ -762,30 +688,38 @@ Voter ID: ${voter?.voterId || ''}`;
           </div>
         </div>
 
+        {/* Print Options Section */}
         <div className="fixed left-4 right-4 bottom-4 max-w-md mx-auto">
-          <div className="bg-white p-3 rounded-2xl shadow-lg flex gap-2 border">
-            <button onClick={shareOnWhatsApp} className="flex-1 bg-green-500 text-white py-2 rounded flex items-center justify-center gap-2"><FaWhatsapp />WhatsApp</button>
-            <button onClick={shareViaSMS} className="flex-1 bg-blue-500 text-white py-2 rounded flex items-center justify-center gap-2"><FiMessageCircle />SMS</button>
-            <button onClick={downloadAsImage} className="bg-purple-600 text-white p-2 rounded flex items-center gap-2"><FiDownload /></button>
-            <button onClick={downloadAsPDF} className="bg-red-600 text-white p-2 rounded flex items-center gap-2"><FaRegFilePdf /></button>
-            <button 
-              onClick={printVoterDetails} 
-              disabled={printing}
-              className="bg-indigo-600 text-white p-2 rounded flex items-center gap-2 disabled:opacity-50"
-            >
-              {printing ? 'Printing...' : <><FiPrinter />Print</>}
-            </button>
-          </div>
-          
-          {/* Alternative print button for thermal printers */}
-          <div className="mt-2 text-center">
-            <button 
-              onClick={simplePrint}
-              disabled={printing}
-              className="text-xs bg-gray-600 text-white px-3 py-1 rounded disabled:opacity-50"
-            >
-              {printing ? 'Printing...' : 'Simple Print (Thermal)'}
-            </button>
+          <div className="bg-white p-3 rounded-2xl shadow-lg flex flex-col gap-2 border">
+            <div className="flex gap-2">
+              <button onClick={shareOnWhatsApp} className="flex-1 bg-green-500 text-white py-2 rounded flex items-center justify-center gap-2"><FaWhatsapp />WhatsApp</button>
+              <button onClick={shareViaSMS} className="flex-1 bg-blue-500 text-white py-2 rounded flex items-center justify-center gap-2"><FiMessageCircle />SMS</button>
+              <button onClick={downloadAsImage} className="bg-purple-600 text-white p-2 rounded flex items-center gap-2"><FiDownload /></button>
+              <button onClick={downloadAsPDF} className="bg-red-600 text-white p-2 rounded flex items-center gap-2"><FaRegFilePdf /></button>
+            </div>
+            
+            {/* RPD-588 Specific Print Options */}
+            <div className="grid grid-cols-2 gap-2">
+              <button 
+                onClick={printForRPD588} 
+                disabled={printing}
+                className="bg-indigo-600 text-white py-2 rounded flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {printing ? 'Printing...' : <><FiPrinter />RPD-588 Print</>}
+              </button>
+              
+              <button 
+                onClick={simpleThermalPrint}
+                disabled={printing}
+                className="bg-orange-600 text-white py-2 rounded flex items-center justify-center gap-2 disabled:opacity-50 text-sm"
+              >
+                {printing ? 'Preparing...' : 'Copy Text'}
+              </button>
+            </div>
+            
+            <div className="text-xs text-center text-gray-500 mt-1">
+              For RPD-588 Thermal Printer - Try different options
+            </div>
           </div>
         </div>
 
