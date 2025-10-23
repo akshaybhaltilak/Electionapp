@@ -370,6 +370,7 @@ Voter ID: ${voter?.voterId || ''}`;
       setPrinterDevice(device);
       setPrinterCharacteristic(writeCharacteristic);
       setBluetoothConnected(true);
+      setPrinting(false);
       
       return { device, server, characteristic: writeCharacteristic };
       
@@ -414,7 +415,7 @@ Voter ID: ${voter?.voterId || ''}`;
     
     // Slogan
     commands.push(`${candidateInfo.slogan}\n`);
-    commands.push('────────────────────────\n');
+    commands.push('------------------------\n');
     
     // Reset to left alignment for voter details
     commands.push('\x1B\x61\x00'); // Left alignment
@@ -423,7 +424,7 @@ Voter ID: ${voter?.voterId || ''}`;
     commands.push('\x1B\x45\x01'); // Bold on
     commands.push('VOTER INFORMATION\n');
     commands.push('\x1B\x45\x00'); // Bold off
-    commands.push('────────────────────────\n');
+    commands.push('------------------------\n');
     
     // Voter details with better formatting
     commands.push(`Name: ${voter?.name || 'N/A'}\n`);
@@ -433,78 +434,101 @@ Voter ID: ${voter?.voterId || ''}`;
     
     // Voted status with emphasis
     if (voter?.voted) {
-      commands.push('────────────────────────\n');
+      commands.push('------------------------\n');
       commands.push('\x1B\x45\x01'); // Bold on
-      commands.push('✅ VOTING COMPLETED\n');
+      commands.push('VOTING COMPLETED\n');
       commands.push('\x1B\x45\x00'); // Bold off
     } else {
-      commands.push('────────────────────────\n');
+      commands.push('------------------------\n');
       commands.push('\x1B\x45\x01'); // Bold on
-      commands.push('⏳ PENDING VOTING\n');
+      commands.push('PENDING VOTING\n');
       commands.push('\x1B\x45\x00'); // Bold off
     }
-    commands.push('────────────────────────\n');
+    commands.push('------------------------\n');
     
-    // Additional voter details
+    // Additional voter details (limited to essential fields)
     commands.push('\x1B\x45\x01'); // Bold on
     commands.push('DETAILS:\n');
     commands.push('\x1B\x45\x00'); // Bold off
     
-    infoFields.forEach(field => {
+    // Only include essential info fields to reduce data size
+    const essentialFields = infoFields.slice(0, 2); // Limit to first 2 fields
+    essentialFields.forEach(field => {
       const value = voter?.[field.key] || '-';
       if (value && value !== '-') {
         commands.push(`${field.label}: ${value}\n`);
       }
     });
     
-    // Address information
+    // Address information (truncated if too long)
     const address = voter?.pollingStationAddress || voter?.address;
     if (address) {
-      commands.push('────────────────────────\n');
+      commands.push('------------------------\n');
       commands.push('Address:\n');
-      // Split long address into multiple lines
-      const addressLines = address.match(/.{1,30}/g) || [address];
+      // Split long address into multiple lines and limit length
+      const shortAddress = address.length > 100 ? address.substring(0, 100) + '...' : address;
+      const addressLines = shortAddress.match(/.{1,30}/g) || [shortAddress];
       addressLines.forEach(line => commands.push(`${line}\n`));
     }
     
-    // Family members section
+    // Family members section (limited to 3 members)
     if (Array.isArray(voter?.family) && voter.family.length > 0) {
-      commands.push('────────────────────────\n');
+      commands.push('------------------------\n');
       commands.push('\x1B\x45\x01'); // Bold on
-      commands.push(`Family Members (${voter.family.length}):\n`);
+      const familyCount = Math.min(voter.family.length, 3);
+      commands.push(`Family (${familyCount}):\n`);
       commands.push('\x1B\x45\x00'); // Bold off
-      voter.family.forEach((member, index) => {
+      voter.family.slice(0, 3).forEach((member, index) => {
         commands.push(`${index + 1}. ${member.name}\n`);
       });
+      if (voter.family.length > 3) {
+        commands.push(`... +${voter.family.length - 3} more\n`);
+      }
     }
     
     // Footer section
-    commands.push('────────────────────────\n');
+    commands.push('------------------------\n');
     commands.push('\x1B\x61\x01'); // Center alignment
-    commands.push('Contact for Support:\n');
-    commands.push(`${candidateInfo.contact}\n`);
-    commands.push(`${candidateInfo.area}\n`);
+    commands.push('Contact: ');
+    commands.push(candidateInfo.contact);
+    commands.push('\n');
+    commands.push(candidateInfo.area);
+    commands.push('\n');
     
     // Date and time
-    commands.push('────────────────────────\n');
-    commands.push(`Printed: ${new Date().toLocaleDateString('en-IN')}\n`);
+    commands.push('------------------------\n');
+    commands.push(`Date: ${new Date().toLocaleDateString('en-IN')}\n`);
     commands.push(`Time: ${new Date().toLocaleTimeString('en-IN', { 
       hour: '2-digit', 
       minute: '2-digit' 
     })}\n`);
     
     // Thank you message
-    commands.push('Thank you for your support!\n');
+    commands.push('Thank you!\n');
     commands.push('Jai Hind!\n');
     
     // Feed paper and cut
-    commands.push('\n\n\n'); // Feed paper
+    commands.push('\n\n'); // Feed paper
     commands.push('\x1D\x56\x00'); // Cut paper
     
     return commands.join('');
   };
 
-  // Print function with persistent connection
+  // Split data into chunks of max 500 bytes
+  const splitDataIntoChunks = (data, chunkSize = 500) => {
+    const encoder = new TextEncoder();
+    const dataBytes = encoder.encode(data);
+    const chunks = [];
+    
+    for (let i = 0; i < dataBytes.length; i += chunkSize) {
+      const chunk = dataBytes.slice(i, i + chunkSize);
+      chunks.push(chunk);
+    }
+    
+    return chunks;
+  };
+
+  // Print function with chunked data
   const printViaBluetooth = async () => {
     if (!voter) {
       alert('No voter data available');
@@ -537,23 +561,27 @@ Voter ID: ${voter?.voterId || ''}`;
 
       // Generate receipt content with improved design
       const receiptText = generateESC_POSCommands();
+      console.log('Receipt text length:', receiptText.length);
       
-      // Convert text to bytes
-      const encoder = new TextEncoder();
-      const data = encoder.encode(receiptText);
-
-      console.log('Sending data to printer...');
+      // Split data into chunks
+      const chunks = splitDataIntoChunks(receiptText, 500);
+      console.log(`Splitting data into ${chunks.length} chunks`);
       
-      // Send data to printer
-      if (characteristic.properties.write) {
-        await characteristic.writeValue(data);
-      } else if (characteristic.properties.writeWithoutResponse) {
-        await characteristic.writeValueWithoutResponse(data);
-      } else {
-        throw new Error('No write capability found');
+      // Send data to printer in chunks
+      for (let i = 0; i < chunks.length; i++) {
+        console.log(`Sending chunk ${i + 1}/${chunks.length}`);
+        
+        if (characteristic.properties.write) {
+          await characteristic.writeValue(chunks[i]);
+        } else if (characteristic.properties.writeWithoutResponse) {
+          await characteristic.writeValueWithoutResponse(chunks[i]);
+        }
+        
+        // Small delay between chunks to prevent overwhelming the printer
+        await new Promise(resolve => setTimeout(resolve, 50));
       }
 
-      console.log('Print command sent successfully');
+      console.log('All chunks sent successfully');
       alert('Receipt printed successfully! 🎉');
 
     } catch (error) {
@@ -566,12 +594,75 @@ Voter ID: ${voter?.voterId || ''}`;
       
       if (error.message.includes('GATT Server') || error.message.includes('disconnected')) {
         alert('Printer connection lost. Please reconnect and try again.');
+      } else if (error.message.includes('512 bytes')) {
+        alert('Print data too large. Trying alternative method...');
+        // Try alternative printing method
+        await printViaBluetoothAlternative();
       } else {
         alert(`Printing failed: ${error.message}\n\nPlease check:\n1. Printer is turned ON\n2. Paper is loaded\n3. Printer is within range`);
       }
     } finally {
       setPrinting(false);
     }
+  };
+
+  // Alternative printing method with even smaller chunks
+  const printViaBluetoothAlternative = async () => {
+    try {
+      if (!printerCharacteristic) {
+        throw new Error('No printer connection');
+      }
+
+      // Generate simpler receipt to reduce data size
+      const simpleReceipt = generateSimpleReceipt();
+      const chunks = splitDataIntoChunks(simpleReceipt, 200); // Even smaller chunks
+      
+      console.log(`Sending ${chunks.length} small chunks`);
+      
+      for (let i = 0; i < chunks.length; i++) {
+        await printerCharacteristic.writeValueWithoutResponse(chunks[i]);
+        await new Promise(resolve => setTimeout(resolve, 100)); // Longer delay
+      }
+      
+      alert('Receipt printed successfully! 🎉');
+    } catch (error) {
+      console.error('Alternative printing failed:', error);
+      throw error;
+    }
+  };
+
+  // Generate simpler receipt for alternative method
+  const generateSimpleReceipt = () => {
+    const lines = [];
+    
+    lines.push('\x1B\x40'); // Initialize
+    lines.push('\x1B\x61\x01'); // Center
+    
+    // Header
+    lines.push('BHARATIYA JANTA PARTY\n');
+    lines.push('RAJESH KUMAR\n');
+    lines.push('Symbol: LOTUS\n');
+    lines.push('------------------------\n');
+    
+    lines.push('\x1B\x61\x00'); // Left
+    
+    // Voter info
+    lines.push(`Name: ${voter?.name || 'N/A'}\n`);
+    lines.push(`ID: ${voter?.voterId || 'N/A'}\n`);
+    lines.push(`Part: ${voter?.listPart || voter?.part || '1'}\n`);
+    lines.push(`Age: ${voter?.age || '-'} Gender: ${voter?.gender || '-'}\n`);
+    
+    if (voter?.voted) {
+      lines.push('VOTED ✓\n');
+    }
+    
+    lines.push('------------------------\n');
+    lines.push(`Date: ${new Date().toLocaleDateString('en-IN')}\n`);
+    lines.push('Thank you!\n');
+    lines.push('\n\n');
+    lines.push('\x1D\x56\x00'); // Cut
+    
+    return lines.join('');
   };
 
   // Disconnect Bluetooth
@@ -605,14 +696,11 @@ Name: ${voter?.name || 'N/A'}
 Voter ID: ${voter?.voterId || 'N/A'}
 Part: ${voter?.listPart || voter?.part || '1'}
 Age: ${voter?.age || '-'} | Gender: ${voter?.gender || '-'}
-Status: ${voter?.voted ? '✅ VOTING COMPLETED' : '⏳ PENDING VOTING'}
-────────────────────────
-${voter?.pollingStationAddress || voter?.address ? `Address: ${voter.pollingStationAddress || voter.address}` : ''}
+Status: ${voter?.voted ? 'VOTING COMPLETED' : 'PENDING VOTING'}
 ────────────────────────
 Contact: ${candidateInfo.contact}
 Area: ${candidateInfo.area}
 Printed: ${new Date().toLocaleDateString('en-IN')}
-Time: ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
 Thank you for your support!
 Jai Hind!
     `.trim();
