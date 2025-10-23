@@ -6,7 +6,7 @@ import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 
 // Icons
-import { FiArrowLeft, FiDownload, FiPrinter, FiMessageCircle, FiMail, FiHash, FiEdit, FiX, FiSearch } from 'react-icons/fi';
+import { FiArrowLeft, FiDownload, FiPrinter, FiMessageCircle, FiMail, FiHash, FiEdit, FiX, FiSearch, FiBluetooth } from 'react-icons/fi';
 import { FaWhatsapp, FaRegFilePdf } from 'react-icons/fa';
 import { GiVote } from 'react-icons/gi';
 
@@ -19,6 +19,7 @@ const FullVoterDetails = () => {
   const [downloading, setDownloading] = useState(false);
   const [activeTab, setActiveTab] = useState('info');
   const [printing, setPrinting] = useState(false);
+  const [bluetoothConnected, setBluetoothConnected] = useState(false);
 
   // family UI
   const [allVoters, setAllVoters] = useState([]);
@@ -275,7 +276,7 @@ const FullVoterDetails = () => {
     alert('Survey saved');
   };
 
-  // --- share/download/print preserved ---
+  // --- share/download functions ---
   const generateWhatsAppMessage = () => `Voter: ${voter?.name || ''}
 Voter ID: ${voter?.voterId || ''}`;
   const shareOnWhatsApp = async () => {
@@ -287,262 +288,243 @@ Voter ID: ${voter?.voterId || ''}`;
   const shareViaEmail = () => window.open(`mailto:?subject=${encodeURIComponent('Voter Details')}&body=${encodeURIComponent(generateWhatsAppMessage())}`, '_blank');
   const downloadAsImage = async () => { setDownloading(true); try { const el = document.getElementById('voter-receipt'); const canvas = await html2canvas(el, { scale: 3, backgroundColor: '#fff', useCORS: true }); const image = canvas.toDataURL('image/png'); const link = document.createElement('a'); link.href = image; link.download = `voter-${voter?.voterId || 'receipt'}.png`; document.body.appendChild(link); link.click(); document.body.removeChild(link); } catch(e){ console.error(e); alert('Error'); } finally{ setDownloading(false); } };
   const downloadAsPDF = async () => { setDownloading(true); try { const el = document.getElementById('voter-receipt'); const canvas = await html2canvas(el, { scale: 2, backgroundColor: '#fff', useCORS: true }); const imgWidth = 210; const imgHeight = (canvas.height * imgWidth) / canvas.width; const pdf = new jsPDF('p','mm','a4'); pdf.addImage(canvas.toDataURL('image/png'),'PNG',0,0,imgWidth,imgHeight); pdf.save(`voter-${voter?.voterId || 'receipt'}.pdf`); } catch(e){ console.error(e); alert('Error'); } finally{ setDownloading(false); } };
-  
-  // RPD-588 Thermal Printer Specific Functions
-  const printForRPD588 = async () => {
-    setPrinting(true);
+
+  // Bluetooth Printing for RPD-588
+  const connectBluetooth = async () => {
+    if (!navigator.bluetooth) {
+      alert('Bluetooth is not supported in this browser. Please use Chrome or Edge on Android.');
+      return null;
+    }
+
     try {
-      // Method 1: Direct USB Printing (for Android/iOS with printer connected)
-      if (navigator.usb && navigator.usb.requestDevice) {
-        await printViaWebUSB();
-        return;
+      setPrinting(true);
+      
+      console.log('Requesting Bluetooth device...');
+      const device = await navigator.bluetooth.requestDevice({
+        filters: [
+          { name: 'RPD588' },
+          { name: 'RPD-588' },
+          { name: 'RP-588' },
+          { name: 'BT-588' },
+          { namePrefix: 'RPD' },
+          { namePrefix: 'RP' },
+          { namePrefix: 'BT' }
+        ],
+        optionalServices: [
+          'generic_access',
+          'device_information',
+          '000018f0-0000-1000-8000-00805f9b34fb', // Common thermal printer service
+          '0000ffe0-0000-1000-8000-00805f9b34fb', // Serial port service
+          '0000ff00-0000-1000-8000-00805f9b34fb'  // Another common printer service
+        ]
+      });
+
+      console.log('Connecting to GATT server...');
+      const server = await device.gatt.connect();
+      setBluetoothConnected(true);
+      
+      console.log('Getting primary services...');
+      const services = await server.getPrimaryServices();
+      console.log('Available services:', services.map(s => s.uuid));
+
+      // Try to find the correct service
+      let printerService = null;
+      for (let service of services) {
+        if (service.uuid.includes('ff00') || service.uuid.includes('ffe0') || service.uuid.includes('18f0')) {
+          printerService = service;
+          break;
+        }
       }
 
-      // Method 2: Bluetooth Printing
-      if (navigator.bluetooth) {
-        await printViaBluetooth();
-        return;
+      if (!printerService) {
+        printerService = services[0]; // Use first service as fallback
       }
 
-      // Method 3: Traditional Print Dialog (Fallback)
-      await traditionalPrint();
+      console.log('Using service:', printerService.uuid);
+      
+      const characteristics = await printerService.getCharacteristics();
+      console.log('Available characteristics:', characteristics.map(c => c.uuid));
 
+      // Find write characteristic
+      let writeCharacteristic = characteristics.find(c => 
+        c.properties.write || c.properties.writeWithoutResponse
+      );
+
+      if (!writeCharacteristic) {
+        writeCharacteristic = characteristics[0]; // Use first characteristic as fallback
+      }
+
+      console.log('Using characteristic:', writeCharacteristic.uuid);
+      
+      return { device, server, characteristic: writeCharacteristic };
+      
     } catch (error) {
-      console.error('Print error:', error);
-      alert(`Printing failed: ${error.message}. Trying alternative method...`);
-      // Fallback to traditional print
-      await traditionalPrint();
-    } finally {
+      console.error('Bluetooth connection failed:', error);
       setPrinting(false);
+      setBluetoothConnected(false);
+      
+      if (error.name === 'NotFoundError') {
+        alert('No Bluetooth printer found. Please make sure:\n\n1. Your RPD-588 printer is turned ON\n2. Bluetooth is enabled on your device\n3. Printer is in pairing mode\n4. Printer is within range');
+      } else if (error.name === 'SecurityError') {
+        alert('Bluetooth permissions denied. Please allow Bluetooth access in your browser settings.');
+      } else {
+        alert(`Bluetooth connection failed: ${error.message}\n\nPlease ensure your printer is paired and try again.`);
+      }
+      return null;
     }
   };
 
-  // Traditional Print Dialog
-  const traditionalPrint = async () => {
-    const receiptContent = generateReceiptContent();
+  // Generate ESC/POS commands for thermal printer
+  const generateESC_POSCommands = (text) => {
+    // ESC/POS commands
+    const commands = [];
     
-    const printWindow = window.open('', '_blank', 'width=320,height=480');
-    if (!printWindow) {
-      alert('Please allow popups for printing. Then try the print button again.');
-      return;
-    }
-
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Print Voter Receipt</title>
-          <meta charset="utf-8">
-          <style>
-            @media print {
-              @page { margin: 0; padding: 0; size: 80mm auto; }
-              body { 
-                margin: 2mm; 
-                padding: 0; 
-                font-family: 'Courier New', monospace;
-                font-size: 9px;
-                line-height: 1;
-                width: 76mm;
-              }
-              * { box-sizing: border-box; }
-              .line { margin: 1px 0; }
-              .center { text-align: center; }
-              .bold { font-weight: bold; }
-              .underline { text-decoration: underline; }
-              .double { font-size: 11px; font-weight: bold; }
-              .separator { border-bottom: 1px dashed #000; margin: 2px 0; }
-              .cut { 
-                border-bottom: 1px dashed #000; 
-                margin: 5px 0; 
-                text-align: center;
-                font-size: 8px;
-              }
-            }
-            body { 
-              font-family: 'Courier New', monospace;
-              font-size: 9px;
-              margin: 5mm;
-              line-height: 1;
-            }
-          </style>
-        </head>
-        <body>
-          <pre>${receiptContent}</pre>
-          <div class="cut">--- CUT HERE ---</div>
-          <script>
-            setTimeout(() => {
-              window.print();
-              setTimeout(() => {
-                window.close();
-              }, 1000);
-            }, 500);
-          </script>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
-  };
-
-  // Generate ESC/POS compatible receipt content
-  const generateReceiptContent = () => {
-    const lines = [];
+    // Initialize printer
+    commands.push('\x1B\x40'); // Initialize
     
-    // Header
-    lines.push('═'.repeat(42));
-    lines.push('        VOTER DETAILS RECEIPT');
-    lines.push('═'.repeat(42));
-    lines.push('');
+    // Set alignment center
+    commands.push('\x1B\x61\x01'); // Center alignment
     
-    // Voter Information
-    lines.push(`NAME:    ${voter?.name || 'N/A'}`);
-    lines.push(`ID:      ${voter?.voterId || 'N/A'}`);
-    lines.push(`PART:    ${voter?.listPart || voter?.part || '1'}`);
-    lines.push(`AGE:     ${voter?.age || '-'}    GENDER: ${voter?.gender || '-'}`);
-    lines.push('');
+    // Title with double height and width
+    commands.push('\x1D\x21\x11'); // Double height and width
+    commands.push('VOTER RECEIPT\n');
+    commands.push('\x1D\x21\x00'); // Normal text
+    commands.push('================\n');
     
-    // Voted Status
+    // Reset to left alignment
+    commands.push('\x1B\x61\x00'); // Left alignment
+    
+    // Voter details
+    commands.push(`NAME: ${voter?.name || 'N/A'}\n`);
+    commands.push(`ID: ${voter?.voterId || 'N/A'}\n`);
+    commands.push(`PART: ${voter?.listPart || voter?.part || '1'}\n`);
+    commands.push(`AGE: ${voter?.age || '-'}   GENDER: ${voter?.gender || '-'}\n`);
+    commands.push('----------------\n');
+    
     if (voter?.voted) {
-      lines.push('══════════════════════════════════════════');
-      lines.push('           ✓ VOTED - COMPLETED');
-      lines.push('══════════════════════════════════════════');
-      lines.push('');
+      commands.push('\x1B\x45\x01'); // Bold on
+      commands.push('✓ VOTED - COMPLETED\n');
+      commands.push('\x1B\x45\x00'); // Bold off
+      commands.push('----------------\n');
     }
     
-    // Details
-    lines.push('─'.repeat(42));
-    lines.push('DETAILS:');
-    lines.push('─'.repeat(42));
-    
+    // Additional details
     infoFields.forEach(field => {
       const value = voter?.[field.key] || '-';
       if (value && value !== '-') {
-        const label = field.label.padEnd(12, ' ');
-        lines.push(`${label}: ${value}`);
+        commands.push(`${field.label}: ${value}\n`);
       }
     });
     
     // Address
     const address = voter?.pollingStationAddress || voter?.address;
     if (address) {
-      lines.push('');
-      lines.push('ADDRESS:');
-      lines.push(address);
+      commands.push('ADDRESS:\n');
+      // Split long address into multiple lines
+      const addressLines = address.match(/.{1,32}/g) || [address];
+      addressLines.forEach(line => commands.push(`${line}\n`));
     }
     
-    // Polling Station
-    const pollingStation = voter?.pollingStation;
-    if (pollingStation) {
-      lines.push('');
-      lines.push('POLLING STATION:');
-      lines.push(pollingStation);
-    }
-    
-    // Family Members
+    // Family members
     if (Array.isArray(voter?.family) && voter.family.length > 0) {
-      lines.push('');
-      lines.push('─'.repeat(42));
-      lines.push(`FAMILY MEMBERS (${voter.family.length}):`);
-      lines.push('─'.repeat(42));
+      commands.push('----------------\n');
+      commands.push(`FAMILY (${voter.family.length}):\n`);
       voter.family.forEach((member, index) => {
-        lines.push(`${(index + 1).toString().padStart(2, ' ')}. ${member.name}`);
+        commands.push(`${index + 1}. ${member.name}\n`);
       });
     }
     
-    // Footer
-    lines.push('');
-    lines.push('─'.repeat(42));
-    lines.push(`Generated: ${new Date().toLocaleDateString('en-IN')}`);
-    lines.push(`Time: ${new Date().toLocaleTimeString('en-IN', { 
+    commands.push('================\n');
+    commands.push(`Date: ${new Date().toLocaleDateString('en-IN')}\n`);
+    commands.push(`Time: ${new Date().toLocaleTimeString('en-IN', { 
       hour: '2-digit', 
       minute: '2-digit' 
-    })}`);
-    lines.push('VoterData Pro System');
-    lines.push('═'.repeat(42));
+    })}\n`);
+    commands.push('VoterData Pro\n');
     
-    return lines.join('\n');
+    // Feed and cut paper
+    commands.push('\n\n\n'); // Feed paper
+    commands.push('\x1D\x56\x00'); // Cut paper (partial cut)
+    
+    return commands.join('');
   };
 
-  // Web USB Printing (for direct USB connection)
-  const printViaWebUSB = async () => {
-    try {
-      const device = await navigator.usb.requestDevice({
-        filters: [{ vendorId: 0x6868 }] // Common thermal printer vendor ID
-      });
-      
-      await device.open();
-      await device.selectConfiguration(1);
-      await device.claimInterface(0);
-      
-      const encoder = new TextEncoder();
-      const receiptText = generateReceiptContent();
-      const data = encoder.encode(receiptText + '\x1B@\x1Bm'); // ESC/POS commands
-      
-      await device.transferOut(1, data);
-      await device.close();
-      
-      alert('Receipt sent to printer successfully!');
-    } catch (error) {
-      console.error('USB printing failed:', error);
-      throw new Error('USB printing not available');
-    }
-  };
-
-  // Bluetooth Printing
+  // Main Bluetooth print function
   const printViaBluetooth = async () => {
+    if (!voter) {
+      alert('No voter data available');
+      return;
+    }
+
     try {
-      const device = await navigator.bluetooth.requestDevice({
-        filters: [
-          { name: 'RPD588' },
-          { name: 'RP-588' },
-          { name: 'Thermal' },
-          { services: ['generic_access'] }
-        ]
-      });
+      setPrinting(true);
       
-      const server = await device.gatt.connect();
-      const service = await server.getPrimaryService('generic_access');
-      const characteristic = await service.getCharacteristic('device_name');
+      // Connect to Bluetooth
+      const connection = await connectBluetooth();
+      if (!connection) {
+        setPrinting(false);
+        return;
+      }
+
+      const { characteristic } = connection;
+
+      // Generate receipt content
+      const receiptText = generateESC_POSCommands();
       
+      // Convert text to bytes
       const encoder = new TextEncoder();
-      const receiptText = generateReceiptContent();
       const data = encoder.encode(receiptText);
+
+      console.log('Sending data to printer...');
       
-      await characteristic.writeValue(data);
-      alert('Receipt sent to Bluetooth printer!');
+      // Send data to printer
+      if (characteristic.properties.write) {
+        await characteristic.writeValue(data);
+      } else if (characteristic.properties.writeWithoutResponse) {
+        await characteristic.writeValueWithoutResponse(data);
+      } else {
+        throw new Error('No write capability found');
+      }
+
+      console.log('Print command sent successfully');
+      
+      // Disconnect after printing
+      setTimeout(async () => {
+        try {
+          await connection.server.disconnect();
+          setBluetoothConnected(false);
+          console.log('Disconnected from printer');
+        } catch (e) {
+          console.log('Disconnect error:', e);
+        }
+      }, 1000);
+
+      alert('Receipt sent to printer successfully!');
+      
     } catch (error) {
-      console.error('Bluetooth printing failed:', error);
-      throw new Error('Bluetooth printing failed');
+      console.error('Printing failed:', error);
+      alert(`Printing failed: ${error.message}\n\nPlease check:\n1. Printer is turned ON\n2. Paper is loaded\n3. Printer is within range\n4. Try reconnecting Bluetooth`);
+    } finally {
+      setPrinting(false);
     }
   };
 
-  // Simple text-based print for maximum compatibility
-  const simpleThermalPrint = () => {
-    setPrinting(true);
-    
-    const receiptText = generateReceiptContent();
-    
-    // Create a simple text area for copying
+  // Simple text print for testing
+  const simplePrint = () => {
+    const receiptContent = generateESC_POSCommands();
     const textArea = document.createElement('textarea');
-    textArea.value = receiptText;
+    textArea.value = receiptContent;
     document.body.appendChild(textArea);
     textArea.select();
     
     try {
-      // Try to copy to clipboard
-      const successful = document.execCommand('copy');
-      if (successful) {
-        alert('Receipt copied to clipboard! You can now paste it into any text editor or printing software.');
-      } else {
-        // Fallback: show text in alert for manual copy
-        alert(`Please copy this text and print it:\n\n${receiptText}`);
-      }
+      document.execCommand('copy');
+      alert('Receipt text copied to clipboard! You can paste it into any text app.');
     } catch (err) {
-      // Final fallback
-      alert(`Please copy this text manually:\n\n${receiptText}`);
+      alert(`Copy this text manually:\n\n${receiptContent}`);
     }
     
     document.body.removeChild(textArea);
-    setPrinting(false);
   };
 
   if (loading) return (<div className="min-h-screen flex items-center justify-center p-4">Loading...</div>);
@@ -698,27 +680,31 @@ Voter ID: ${voter?.voterId || ''}`;
               <button onClick={downloadAsPDF} className="bg-red-600 text-white p-2 rounded flex items-center gap-2"><FaRegFilePdf /></button>
             </div>
             
-            {/* RPD-588 Specific Print Options */}
+            {/* Bluetooth Print Options */}
             <div className="grid grid-cols-2 gap-2">
               <button 
-                onClick={printForRPD588} 
+                onClick={printViaBluetooth} 
                 disabled={printing}
                 className="bg-indigo-600 text-white py-2 rounded flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                {printing ? 'Printing...' : <><FiPrinter />RPD-588 Print</>}
+                {printing ? (
+                  <>Printing...</>
+                ) : (
+                  <><FiBluetooth className="text-white" />Print RPD-588</>
+                )}
               </button>
               
               <button 
-                onClick={simpleThermalPrint}
+                onClick={simplePrint}
                 disabled={printing}
                 className="bg-orange-600 text-white py-2 rounded flex items-center justify-center gap-2 disabled:opacity-50 text-sm"
               >
-                {printing ? 'Preparing...' : 'Copy Text'}
+                Copy Text
               </button>
             </div>
             
             <div className="text-xs text-center text-gray-500 mt-1">
-              For RPD-588 Thermal Printer - Try different options
+              {bluetoothConnected ? '✓ Bluetooth Connected' : 'For RPD-588 Bluetooth Printing'}
             </div>
           </div>
         </div>
