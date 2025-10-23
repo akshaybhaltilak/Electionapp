@@ -18,6 +18,7 @@ const FullVoterDetails = () => {
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
   const [activeTab, setActiveTab] = useState('info');
+  const [printing, setPrinting] = useState(false);
 
   // family UI
   const [allVoters, setAllVoters] = useState([]);
@@ -287,140 +288,335 @@ Voter ID: ${voter?.voterId || ''}`;
   const downloadAsImage = async () => { setDownloading(true); try { const el = document.getElementById('voter-receipt'); const canvas = await html2canvas(el, { scale: 3, backgroundColor: '#fff', useCORS: true }); const image = canvas.toDataURL('image/png'); const link = document.createElement('a'); link.href = image; link.download = `voter-${voter?.voterId || 'receipt'}.png`; document.body.appendChild(link); link.click(); document.body.removeChild(link); } catch(e){ console.error(e); alert('Error'); } finally{ setDownloading(false); } };
   const downloadAsPDF = async () => { setDownloading(true); try { const el = document.getElementById('voter-receipt'); const canvas = await html2canvas(el, { scale: 2, backgroundColor: '#fff', useCORS: true }); const imgWidth = 210; const imgHeight = (canvas.height * imgWidth) / canvas.width; const pdf = new jsPDF('p','mm','a4'); pdf.addImage(canvas.toDataURL('image/png'),'PNG',0,0,imgWidth,imgHeight); pdf.save(`voter-${voter?.voterId || 'receipt'}.pdf`); } catch(e){ console.error(e); alert('Error'); } finally{ setDownloading(false); } };
   
-  // Improved print function
+  // Enhanced Bluetooth Printer Compatible Print Function
   const printVoterDetails = () => {
-    const printContent = document.getElementById('print-receipt');
-    const printWindow = window.open('', '_blank', 'width=800,height=600');
-    
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Print Voter Receipt</title>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <style>
-            @media print {
-              @page {
-                margin: 0.5cm;
-                size: auto;
+    setPrinting(true);
+    try {
+      // Create a print-optimized version of the receipt
+      const printContent = `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Voter Receipt - ${voter?.name || 'Voter'}</title>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <style>
+              @media print {
+                @page {
+                  margin: 0;
+                  padding: 0;
+                  size: auto;
+                }
+                body {
+                  margin: 0;
+                  padding: 5mm;
+                  font-family: 'Courier New', monospace;
+                  font-size: 10px;
+                  line-height: 1.2;
+                  color: #000;
+                  background: white;
+                  width: 100%;
+                }
+                * {
+                  box-sizing: border-box;
+                }
+                .receipt-container {
+                  width: 100%;
+                  max-width: 80mm;
+                  margin: 0 auto;
+                  padding: 0;
+                }
+                .header {
+                  text-align: center;
+                  border-bottom: 1px solid #000;
+                  padding-bottom: 3px;
+                  margin-bottom: 5px;
+                }
+                .title {
+                  font-size: 12px;
+                  font-weight: bold;
+                  margin: 0;
+                  text-transform: uppercase;
+                }
+                .subtitle {
+                  font-size: 8px;
+                  margin: 0;
+                  color: #666;
+                }
+                .voter-name {
+                  font-size: 11px;
+                  font-weight: bold;
+                  text-align: center;
+                  margin: 5px 0;
+                  text-transform: uppercase;
+                }
+                .voter-meta {
+                  display: flex;
+                  flex-wrap: wrap;
+                  justify-content: space-between;
+                  font-size: 8px;
+                  margin-bottom: 5px;
+                  gap: 2px;
+                }
+                .voter-meta div {
+                  flex: 1;
+                  min-width: 45%;
+                }
+                .voted-badge {
+                  text-align: center;
+                  font-weight: bold;
+                  font-size: 9px;
+                  margin: 5px 0;
+                  padding: 2px;
+                  border: 1px solid #000;
+                  background: #f0f0f0;
+                  text-transform: uppercase;
+                }
+                .detail-section {
+                  margin: 5px 0;
+                }
+                .detail-row {
+                  display: flex;
+                  justify-content: space-between;
+                  margin: 2px 0;
+                  padding: 1px 0;
+                  border-bottom: 1px dotted #ccc;
+                }
+                .detail-label {
+                  font-weight: bold;
+                  min-width: 35mm;
+                }
+                .detail-value {
+                  text-align: right;
+                  flex: 1;
+                  margin-left: 2mm;
+                  word-break: break-word;
+                }
+                .family-section {
+                  margin-top: 5px;
+                }
+                .family-title {
+                  font-weight: bold;
+                  margin-bottom: 3px;
+                  border-bottom: 1px solid #000;
+                  padding-bottom: 1px;
+                }
+                .family-member {
+                  display: flex;
+                  justify-content: space-between;
+                  margin: 1px 0;
+                  font-size: 8px;
+                }
+                .footer {
+                  text-align: center;
+                  margin-top: 8px;
+                  padding-top: 3px;
+                  border-top: 1px solid #000;
+                  font-size: 7px;
+                  color: #666;
+                }
+                .separator {
+                  border-top: 1px dashed #000;
+                  margin: 3px 0;
+                }
+                .no-print {
+                  display: none !important;
+                }
               }
-              body {
-                margin: 0;
-                padding: 0;
-                font-family: Arial, sans-serif;
-                font-size: 12px;
-                line-height: 1.2;
-                color: #000;
-                background: white;
+              
+              @media screen {
+                body {
+                  font-family: Arial, sans-serif;
+                  margin: 10px;
+                  background: #f5f5f5;
+                }
+                .receipt-container {
+                  max-width: 80mm;
+                  margin: 0 auto;
+                  border: 1px solid #ccc;
+                  padding: 10px;
+                  background: white;
+                  box-shadow: 0 0 10px rgba(0,0,0,0.1);
+                }
               }
-              .print-container {
-                max-width: 100%;
-                margin: 0 auto;
-                padding: 10px;
-              }
-              .print-header {
-                text-align: center;
-                border-bottom: 2px solid #000;
-                padding-bottom: 8px;
-                margin-bottom: 10px;
-              }
-              .print-title {
-                font-size: 16px;
-                font-weight: bold;
-                margin-bottom: 5px;
-              }
-              .print-subtitle {
-                font-size: 12px;
-                color: #666;
-              }
-              .voter-name {
-                font-size: 14px;
-                font-weight: bold;
-                text-align: center;
-                margin: 8px 0;
-              }
-              .voter-meta {
-                display: flex;
-                justify-content: space-between;
-                font-size: 10px;
-                margin-bottom: 8px;
-                flex-wrap: wrap;
-              }
-              .voter-meta div {
-                margin: 1px 0;
-              }
-              .detail-section {
-                margin: 8px 0;
-              }
-              .detail-row {
-                display: flex;
-                justify-content: space-between;
-                margin: 3px 0;
-                border-bottom: 1px dotted #ccc;
-                padding-bottom: 2px;
-              }
-              .detail-label {
-                font-weight: bold;
-                min-width: 120px;
-              }
-              .detail-value {
-                text-align: right;
-                flex: 1;
-                margin-left: 10px;
-              }
-              .voted-badge {
-                text-align: center;
-                font-weight: bold;
-                margin: 8px 0;
-                padding: 3px;
-                border: 1px solid #000;
-                background: #f0f0f0;
-              }
-              .print-footer {
-                text-align: center;
-                margin-top: 15px;
-                padding-top: 8px;
-                border-top: 1px solid #000;
-                font-size: 10px;
-                color: #666;
-              }
-              .no-print {
-                display: none !important;
-              }
-            }
-            
-            @media screen {
-              body {
-                font-family: Arial, sans-serif;
-                margin: 20px;
-              }
-              .print-container {
-                max-width: 600px;
-                margin: 0 auto;
-                border: 1px solid #ccc;
-                padding: 20px;
-              }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="print-container">
-            ${printContent.innerHTML}
-          </div>
-          <script>
-            window.onload = function() {
-              window.print();
-              setTimeout(function() {
-                window.close();
+            </style>
+          </head>
+          <body>
+            <div class="receipt-container">
+              <div class="header">
+                <div class="title">VOTER DETAILS RECEIPT</div>
+                <div class="subtitle">VoterData Pro - Official Record</div>
+              </div>
+              
+              <div class="voter-name">${voter?.name || 'N/A'}</div>
+              
+              <div class="voter-meta">
+                <div><strong>Voter ID:</strong> ${voter?.voterId || 'N/A'}</div>
+                <div><strong>Part:</strong> ${voter?.listPart || voter?.part || '1'}</div>
+                <div><strong>Age:</strong> ${voter?.age || '-'}</div>
+                <div><strong>Gender:</strong> ${voter?.gender || '-'}</div>
+              </div>
+
+              ${voter?.voted ? '<div class="voted-badge">✓ VOTED - ELECTION COMPLETED</div>' : ''}
+
+              <div class="detail-section">
+                ${infoFields.map(f => `
+                  <div class="detail-row">
+                    <span class="detail-label">${f.label}:</span>
+                    <span class="detail-value">${voter?.[f.key] || '-'}</span>
+                  </div>
+                `).join('')}
+                
+                <div class="detail-row">
+                  <span class="detail-label">Address:</span>
+                  <span class="detail-value">${voter?.pollingStationAddress || voter?.address || '-'}</span>
+                </div>
+                
+                <div class="detail-row">
+                  <span class="detail-label">Polling Station:</span>
+                  <span class="detail-value">${voter?.pollingStation || voter?.pollingStationAddress || '-'}</span>
+                </div>
+              </div>
+
+              ${Array.isArray(voter?.family) && voter.family.length > 0 ? `
+                <div class="family-section">
+                  <div class="family-title">Family Members (${voter.family.length}):</div>
+                  ${voter.family.map((m, index) => `
+                    <div class="family-member">
+                      <span>${index + 1}. ${m.name}</span>
+                      <span>ID: ${m.id.substring(0, 8)}...</span>
+                    </div>
+                  `).join('')}
+                </div>
+              ` : ''}
+
+              <div class="separator"></div>
+
+              <div class="footer">
+                <div>Generated: ${new Date().toLocaleDateString('en-IN')} ${new Date().toLocaleTimeString('en-IN', {hour: '2-digit', minute:'2-digit'})}</div>
+                <div>VoterData Pro System</div>
+              </div>
+            </div>
+
+            <script>
+              // Auto-print and close for Bluetooth printers
+              setTimeout(() => {
+                window.print();
+                
+                // Close window after print (with delay for Bluetooth printers)
+                setTimeout(() => {
+                  window.close();
+                }, 1000);
               }, 500);
-            };
-          </script>
-        </body>
-      </html>
-    `);
-    
-    printWindow.document.close();
+            </script>
+          </body>
+        </html>
+      `;
+
+      // Open print window
+      const printWindow = window.open('', '_blank', 'width=400,height=600');
+      if (!printWindow) {
+        alert('Please allow popups for printing. Then try again.');
+        setPrinting(false);
+        return;
+      }
+
+      printWindow.document.write(printContent);
+      printWindow.document.close();
+
+      // Fallback: if window doesn't close automatically, show manual instructions
+      setTimeout(() => {
+        if (!printWindow.closed) {
+          const userConfirmed = confirm(
+            'Print window opened. Please select your Bluetooth printer from the print dialog.\n\n' +
+            'If print dialog didn\'t appear, check:\n' +
+            '1. Bluetooth printer is connected & paired\n' +
+            '2. Try manual print (Ctrl+P)\n\n' +
+            'Close this window when done?'
+          );
+          if (userConfirmed) {
+            printWindow.close();
+          }
+        }
+        setPrinting(false);
+      }, 3000);
+
+    } catch (error) {
+      console.error('Print error:', error);
+      alert('Printing failed. Please try again or use PDF export.');
+      setPrinting(false);
+    }
+  };
+
+  // Alternative simple print for thermal printers
+  const simplePrint = () => {
+    setPrinting(true);
+    try {
+      const simpleContent = `
+        VOTER DETAILS RECEIPT
+        =====================
+        Name: ${voter?.name || 'N/A'}
+        Voter ID: ${voter?.voterId || 'N/A'}
+        Part: ${voter?.listPart || voter?.part || '1'}
+        Age: ${voter?.age || '-'} | Gender: ${voter?.gender || '-'}
+        ${voter?.voted ? '✓ VOTED - ELECTION COMPLETED' : ''}
+        ---------------------
+        Village: ${voter?.village || '-'}
+        Taluka: ${voter?.taluka || '-'}
+        House No: ${voter?.houseNumber || '-'}
+        Address: ${voter?.address || voter?.pollingStationAddress || '-'}
+        Polling Station: ${voter?.pollingStation || '-'}
+        ---------------------
+        ${Array.isArray(voter?.family) && voter.family.length > 0 ? 
+          `Family Members:\n${voter.family.map((m, i) => ` ${i+1}. ${m.name}`).join('\n')}\n---------------------\n` : ''}
+        Generated: ${new Date().toLocaleDateString('en-IN')}
+        VoterData Pro System
+        =====================
+      `;
+
+      const printWindow = window.open('', '_blank', 'width=400,height=600');
+      if (!printWindow) {
+        alert('Please allow popups for printing');
+        setPrinting(false);
+        return;
+      }
+
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Print Voter Receipt</title>
+            <style>
+              body {
+                font-family: 'Courier New', monospace;
+                font-size: 12px;
+                white-space: pre-wrap;
+                margin: 10px;
+                line-height: 1.2;
+              }
+              @media print {
+                body { margin: 0; font-size: 10px; }
+              }
+            </style>
+          </head>
+          <body>
+            <pre>${simpleContent}</pre>
+            <script>
+              setTimeout(() => {
+                window.print();
+                setTimeout(() => window.close(), 1000);
+              }, 500);
+            </script>
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
+      
+      setTimeout(() => setPrinting(false), 2000);
+    } catch (error) {
+      console.error('Simple print error:', error);
+      setPrinting(false);
+    }
   };
 
   if (loading) return (<div className="min-h-screen flex items-center justify-center p-4">Loading...</div>);
@@ -566,74 +762,34 @@ Voter ID: ${voter?.voterId || ''}`;
           </div>
         </div>
 
-        {/* Hidden print-optimized receipt */}
-        <div id="print-receipt" className="hidden">
-          <div className="print-header">
-            <div className="print-title">VOTER DETAILS RECEIPT</div>
-            <div className="print-subtitle">VoterData Pro - Official Record</div>
-          </div>
-          
-          <div className="voter-name">{voter.name}</div>
-          
-          <div className="voter-meta">
-            <div><strong>Voter ID:</strong> {voter.voterId || 'N/A'}</div>
-            <div><strong>Part:</strong> {voter.listPart || voter.part || '1'}</div>
-            <div><strong>Age:</strong> {voter.age || '-'}</div>
-            <div><strong>Gender:</strong> {voter.gender || '-'}</div>
-          </div>
-
-          {voter.voted && (
-            <div className="voted-badge">✓ VOTED - ELECTION COMPLETED</div>
-          )}
-
-          <div className="detail-section">
-            {infoFields.map(f => (
-              <div key={f.key} className="detail-row">
-                <span className="detail-label">{f.label}:</span>
-                <span className="detail-value">{voter[f.key] || '-'}</span>
-              </div>
-            ))}
-            
-            <div className="detail-row">
-              <span className="detail-label">Address:</span>
-              <span className="detail-value">{voter.pollingStationAddress || voter.address || '-'}</span>
-            </div>
-            
-            <div className="detail-row">
-              <span className="detail-label">Polling Station:</span>
-              <span className="detail-value">{voter.pollingStation || voter.pollingStationAddress || '-'}</span>
-            </div>
-          </div>
-
-          {Array.isArray(voter.family) && voter.family.length > 0 && (
-            <div className="detail-section">
-              <div style={{fontWeight: 'bold', marginBottom: '5px'}}>Family Members:</div>
-              {voter.family.map((m, index) => (
-                <div key={m.id} className="detail-row">
-                  <span className="detail-label">{index + 1}. {m.name}</span>
-                  <span className="detail-value">ID: {m.id}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="print-footer">
-            <div>Generated on: {new Date().toLocaleDateString('en-IN')} at {new Date().toLocaleTimeString('en-IN')}</div>
-            <div>VoterData Pro System - Confidential</div>
-          </div>
-        </div>
-
         <div className="fixed left-4 right-4 bottom-4 max-w-md mx-auto">
           <div className="bg-white p-3 rounded-2xl shadow-lg flex gap-2 border">
             <button onClick={shareOnWhatsApp} className="flex-1 bg-green-500 text-white py-2 rounded flex items-center justify-center gap-2"><FaWhatsapp />WhatsApp</button>
             <button onClick={shareViaSMS} className="flex-1 bg-blue-500 text-white py-2 rounded flex items-center justify-center gap-2"><FiMessageCircle />SMS</button>
             <button onClick={downloadAsImage} className="bg-purple-600 text-white p-2 rounded flex items-center gap-2"><FiDownload /></button>
             <button onClick={downloadAsPDF} className="bg-red-600 text-white p-2 rounded flex items-center gap-2"><FaRegFilePdf /></button>
-            <button onClick={printVoterDetails} className="bg-indigo-600 text-white p-2 rounded flex items-center gap-2"><FiPrinter /></button>
+            <button 
+              onClick={printVoterDetails} 
+              disabled={printing}
+              className="bg-indigo-600 text-white p-2 rounded flex items-center gap-2 disabled:opacity-50"
+            >
+              {printing ? 'Printing...' : <><FiPrinter />Print</>}
+            </button>
+          </div>
+          
+          {/* Alternative print button for thermal printers */}
+          <div className="mt-2 text-center">
+            <button 
+              onClick={simplePrint}
+              disabled={printing}
+              className="text-xs bg-gray-600 text-white px-3 py-1 rounded disabled:opacity-50"
+            >
+              {printing ? 'Printing...' : 'Simple Print (Thermal)'}
+            </button>
           </div>
         </div>
 
-        {/* Family modal */}
+        {/* Rest of your modals remain the same */}
         {familyModalOpen && (
           <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-lg w-full max-w-lg p-4 shadow-lg">
@@ -672,7 +828,7 @@ Voter ID: ${voter?.voterId || ''}`;
           </div>
         )}
 
-        {/* Member detail modal */}
+        {/* Other modals remain unchanged */}
         {memberDetailOpen && memberDetail && (
           <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-lg w-full max-w-md p-4 shadow-lg">
