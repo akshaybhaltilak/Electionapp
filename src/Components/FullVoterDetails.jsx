@@ -10,10 +10,6 @@ import { FiArrowLeft, FiDownload, FiPrinter, FiMessageCircle, FiMail, FiHash, Fi
 import { FaWhatsapp, FaRegFilePdf } from 'react-icons/fa';
 import { GiVote } from 'react-icons/gi';
 
-// Features added in this update:
-// 1) Family: ability to Remove a family member and View full details of a member (modal)
-// 2) Survey: shows input fields for "info" attributes that are missing in the voter record
-
 const FullVoterDetails = () => {
   const { voterId } = useParams();
   const navigate = useNavigate();
@@ -99,7 +95,7 @@ const FullVoterDetails = () => {
     }
   };
 
-  // Load voters in chunks (first N records) to avoid huge downloads
+  // Load voters in chunks (first N record) to avoid huge downloads
   const loadVotersInChunks = async (batchSize = 1000) => {
     setLoading(true);
     const list = [];
@@ -290,7 +286,142 @@ Voter ID: ${voter?.voterId || ''}`;
   const shareViaEmail = () => window.open(`mailto:?subject=${encodeURIComponent('Voter Details')}&body=${encodeURIComponent(generateWhatsAppMessage())}`, '_blank');
   const downloadAsImage = async () => { setDownloading(true); try { const el = document.getElementById('voter-receipt'); const canvas = await html2canvas(el, { scale: 3, backgroundColor: '#fff', useCORS: true }); const image = canvas.toDataURL('image/png'); const link = document.createElement('a'); link.href = image; link.download = `voter-${voter?.voterId || 'receipt'}.png`; document.body.appendChild(link); link.click(); document.body.removeChild(link); } catch(e){ console.error(e); alert('Error'); } finally{ setDownloading(false); } };
   const downloadAsPDF = async () => { setDownloading(true); try { const el = document.getElementById('voter-receipt'); const canvas = await html2canvas(el, { scale: 2, backgroundColor: '#fff', useCORS: true }); const imgWidth = 210; const imgHeight = (canvas.height * imgWidth) / canvas.width; const pdf = new jsPDF('p','mm','a4'); pdf.addImage(canvas.toDataURL('image/png'),'PNG',0,0,imgWidth,imgHeight); pdf.save(`voter-${voter?.voterId || 'receipt'}.pdf`); } catch(e){ console.error(e); alert('Error'); } finally{ setDownloading(false); } };
-  const printVoterDetails = () => { const el = document.getElementById('voter-receipt'); const w = window.open('','_blank'); w.document.write(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body>${el.innerHTML}</body></html>`); w.document.close(); setTimeout(()=>{ w.print(); w.close(); }, 400); };
+  
+  // Improved print function
+  const printVoterDetails = () => {
+    const printContent = document.getElementById('print-receipt');
+    const printWindow = window.open('', '_blank', 'width=800,height=600');
+    
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Print Voter Receipt</title>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <style>
+            @media print {
+              @page {
+                margin: 0.5cm;
+                size: auto;
+              }
+              body {
+                margin: 0;
+                padding: 0;
+                font-family: Arial, sans-serif;
+                font-size: 12px;
+                line-height: 1.2;
+                color: #000;
+                background: white;
+              }
+              .print-container {
+                max-width: 100%;
+                margin: 0 auto;
+                padding: 10px;
+              }
+              .print-header {
+                text-align: center;
+                border-bottom: 2px solid #000;
+                padding-bottom: 8px;
+                margin-bottom: 10px;
+              }
+              .print-title {
+                font-size: 16px;
+                font-weight: bold;
+                margin-bottom: 5px;
+              }
+              .print-subtitle {
+                font-size: 12px;
+                color: #666;
+              }
+              .voter-name {
+                font-size: 14px;
+                font-weight: bold;
+                text-align: center;
+                margin: 8px 0;
+              }
+              .voter-meta {
+                display: flex;
+                justify-content: space-between;
+                font-size: 10px;
+                margin-bottom: 8px;
+                flex-wrap: wrap;
+              }
+              .voter-meta div {
+                margin: 1px 0;
+              }
+              .detail-section {
+                margin: 8px 0;
+              }
+              .detail-row {
+                display: flex;
+                justify-content: space-between;
+                margin: 3px 0;
+                border-bottom: 1px dotted #ccc;
+                padding-bottom: 2px;
+              }
+              .detail-label {
+                font-weight: bold;
+                min-width: 120px;
+              }
+              .detail-value {
+                text-align: right;
+                flex: 1;
+                margin-left: 10px;
+              }
+              .voted-badge {
+                text-align: center;
+                font-weight: bold;
+                margin: 8px 0;
+                padding: 3px;
+                border: 1px solid #000;
+                background: #f0f0f0;
+              }
+              .print-footer {
+                text-align: center;
+                margin-top: 15px;
+                padding-top: 8px;
+                border-top: 1px solid #000;
+                font-size: 10px;
+                color: #666;
+              }
+              .no-print {
+                display: none !important;
+              }
+            }
+            
+            @media screen {
+              body {
+                font-family: Arial, sans-serif;
+                margin: 20px;
+              }
+              .print-container {
+                max-width: 600px;
+                margin: 0 auto;
+                border: 1px solid #ccc;
+                padding: 20px;
+              }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="print-container">
+            ${printContent.innerHTML}
+          </div>
+          <script>
+            window.onload = function() {
+              window.print();
+              setTimeout(function() {
+                window.close();
+              }, 500);
+            };
+          </script>
+        </body>
+      </html>
+    `);
+    
+    printWindow.document.close();
+  };
 
   if (loading) return (<div className="min-h-screen flex items-center justify-center p-4">Loading...</div>);
   if (!voter) return (<div className="min-h-screen flex items-center justify-center p-4"><div>Voter not found<button onClick={()=>navigate('/')}>Back</button></div></div>);
@@ -313,6 +444,7 @@ Voter ID: ${voter?.voterId || ''}`;
           </div>
         </div>
 
+        {/* Main receipt for display */}
         <div id="voter-receipt" className="bg-white rounded-2xl -mt-6 shadow-lg overflow-hidden border border-gray-100">
           <div className="p-4 pt-6">
             <div className="text-center">
@@ -388,26 +520,24 @@ Voter ID: ${voter?.voterId || ''}`;
                     <label className="text-xs">Date of Birth</label>
                     <input type="date" value={surveyData.dob} onChange={(e)=>setSurveyData(s=>({...s, dob: e.target.value}))} className="p-2 border rounded" />
 
-                    {/* Show the missing info fields only */}
-             {missingInfoFields.length ? (
-  missingInfoFields.map((f) => {
-    return (
-      <div key={f.key}>
-        <label className="text-xs">{f.label}</label>
-        <input
-          value={surveyData && surveyData[f.key] !== undefined ? surveyData[f.key] : ''}
-          onChange={(e) => setSurveyData(s => ({ ...s, [f.key]: e.target.value }))}
-          className="p-2 border rounded"
-        />
-      </div>
-    );
-  })
-) : (
-  <div className="text-sm text-gray-500">
-    No missing info fields. You can still update phone or dob.
-  </div>
-)}
-
+                    {missingInfoFields.length ? (
+                      missingInfoFields.map((f) => {
+                        return (
+                          <div key={f.key}>
+                            <label className="text-xs">{f.label}</label>
+                            <input
+                              value={surveyData && surveyData[f.key] !== undefined ? surveyData[f.key] : ''}
+                              onChange={(e) => setSurveyData(s => ({ ...s, [f.key]: e.target.value }))}
+                              className="p-2 border rounded"
+                            />
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="text-sm text-gray-500">
+                        No missing info fields. You can still update phone or dob.
+                      </div>
+                    )}
 
                     <label className="text-xs">Address</label>
                     <textarea value={surveyData.address} onChange={(e)=>setSurveyData(s=>({...s, address: e.target.value}))} className="p-2 border rounded" rows={3} />
@@ -433,6 +563,63 @@ Voter ID: ${voter?.voterId || ''}`;
               <div>{new Date().toLocaleDateString('en-IN')}</div>
             </div>
 
+          </div>
+        </div>
+
+        {/* Hidden print-optimized receipt */}
+        <div id="print-receipt" className="hidden">
+          <div className="print-header">
+            <div className="print-title">VOTER DETAILS RECEIPT</div>
+            <div className="print-subtitle">VoterData Pro - Official Record</div>
+          </div>
+          
+          <div className="voter-name">{voter.name}</div>
+          
+          <div className="voter-meta">
+            <div><strong>Voter ID:</strong> {voter.voterId || 'N/A'}</div>
+            <div><strong>Part:</strong> {voter.listPart || voter.part || '1'}</div>
+            <div><strong>Age:</strong> {voter.age || '-'}</div>
+            <div><strong>Gender:</strong> {voter.gender || '-'}</div>
+          </div>
+
+          {voter.voted && (
+            <div className="voted-badge">✓ VOTED - ELECTION COMPLETED</div>
+          )}
+
+          <div className="detail-section">
+            {infoFields.map(f => (
+              <div key={f.key} className="detail-row">
+                <span className="detail-label">{f.label}:</span>
+                <span className="detail-value">{voter[f.key] || '-'}</span>
+              </div>
+            ))}
+            
+            <div className="detail-row">
+              <span className="detail-label">Address:</span>
+              <span className="detail-value">{voter.pollingStationAddress || voter.address || '-'}</span>
+            </div>
+            
+            <div className="detail-row">
+              <span className="detail-label">Polling Station:</span>
+              <span className="detail-value">{voter.pollingStation || voter.pollingStationAddress || '-'}</span>
+            </div>
+          </div>
+
+          {Array.isArray(voter.family) && voter.family.length > 0 && (
+            <div className="detail-section">
+              <div style={{fontWeight: 'bold', marginBottom: '5px'}}>Family Members:</div>
+              {voter.family.map((m, index) => (
+                <div key={m.id} className="detail-row">
+                  <span className="detail-label">{index + 1}. {m.name}</span>
+                  <span className="detail-value">ID: {m.id}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="print-footer">
+            <div>Generated on: {new Date().toLocaleDateString('en-IN')} at {new Date().toLocaleTimeString('en-IN')}</div>
+            <div>VoterData Pro System - Confidential</div>
           </div>
         </div>
 
