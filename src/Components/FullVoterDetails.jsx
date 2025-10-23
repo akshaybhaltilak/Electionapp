@@ -632,38 +632,57 @@ Voter ID: ${voter?.voterId || ''}`;
   };
 
   // Generate simpler receipt for alternative method
-  const generateSimpleReceipt = () => {
-    const lines = [];
-    
-    lines.push('\x1B\x40'); // Initialize
-    lines.push('\x1B\x61\x01'); // Center
-    
-    // Header
-    lines.push('BHARATIYA JANTA PARTY\n');
-    lines.push('RAJESH KUMAR\n');
-    lines.push('Symbol: LOTUS\n');
-    lines.push('------------------------\n');
-    
-    lines.push('\x1B\x61\x00'); // Left
-    
-    // Voter info
-    lines.push(`Name: ${voter?.name || 'N/A'}\n`);
-    lines.push(`ID: ${voter?.voterId || 'N/A'}\n`);
-    lines.push(`Part: ${voter?.listPart || voter?.part || '1'}\n`);
-    lines.push(`Age: ${voter?.age || '-'} Gender: ${voter?.gender || '-'}\n`);
-    
-    if (voter?.voted) {
-      lines.push('VOTED ✓\n');
-    }
-    
-    lines.push('------------------------\n');
-    lines.push(`Date: ${new Date().toLocaleDateString('en-IN')}\n`);
-    lines.push('Thank you!\n');
-    lines.push('\n\n');
-    lines.push('\x1D\x56\x00'); // Cut
-    
-    return lines.join('');
-  };
+ const generateSimpleReceipt = () => {
+  const lines = [];
+  
+  lines.push('\x1B\x40'); // Initialize
+  lines.push('\x1B\x61\x01'); // Center
+  
+  // Compact Header
+  lines.push('BJP - Akshay Bhaltilak\n');
+  lines.push('LOTUS (2)\n');
+  lines.push('----------------\n');
+  
+  lines.push('\x1B\x61\x00'); // Left
+  
+  // Essential Voter Info
+  lines.push(`Name: ${voter?.name || 'N/A'}\n`);
+  lines.push(`ID: ${voter?.voterId || 'N/A'}\n`);
+  lines.push(`Age: ${voter?.age || '-'} | ${voter?.gender || '-'}\n`);
+  
+  // Voting Status
+  lines.push(voter?.voted ? 'VOTED ✓\n' : 'PENDING\n');
+  lines.push('----------------\n');
+  
+  // Polling Station Info
+  const pollingAddress = voter?.pollingStationAddress || voter?.address;
+  if (pollingAddress) {
+    lines.push('Polling Station:\n');
+    const shortAddr = pollingAddress.length > 35 ? pollingAddress.substring(0, 35) + '...' : pollingAddress;
+    lines.push(`${shortAddr}\n`);
+  }
+  
+  // Room Number
+  const roomNo = voter?.roomNumber || voter?.houseNumber;
+  if (roomNo) {
+    lines.push(`Room: ${roomNo}\n`);
+  }
+  
+  // Part Info
+  const part = voter?.listPart || voter?.part;
+  if (part) {
+    lines.push(`Part: ${part}\n`);
+  }
+  
+  lines.push('----------------\n');
+  lines.push('\x1B\x61\x01'); // Center
+  lines.push('Jai Hind!\n');
+  
+  lines.push('\n\n');
+  lines.push('\x1D\x56\x00'); // Cut
+  
+  return lines.join('');
+};
 
   // Disconnect Bluetooth
   const disconnectBluetooth = async () => {
