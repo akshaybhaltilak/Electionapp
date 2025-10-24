@@ -1,5 +1,3 @@
-
-
 import React, { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, Link } from 'react-router-dom';
 import useAutoTranslate from './hooks/useAutoTranslate';
@@ -11,6 +9,9 @@ import Home from './Pages/Home';
 import ListModePage from './Components/ListModePage';
 import StyledFilterPage from './Components/styledFilterPage';
 import BoothManagement from './Components/BoothManagement';
+import Campaign from './Components/Campaign';
+import Team from './Components/Team';
+import Reports from './Components/Reports';
 
 function App() {
   const [currentView, setCurrentView] = useState('upload');
@@ -78,6 +79,10 @@ function App() {
                 <Link to="/home" onClick={() => setCurrentView('home')} className={`px-4 py-2 rounded-lg text-sm ${currentView === 'home' ? 'bg-orange-700' : 'hover:bg-orange-700'}`}>{t('Home')}</Link>
                 <Link to="/upload" onClick={() => setCurrentView('upload')} className={`px-4 py-2 rounded-lg text-sm ${currentView === 'upload' ? 'bg-orange-700' : 'hover:bg-orange-700'}`}>{t('Upload')}</Link>
                 <Link to="/dashboard" onClick={() => setCurrentView('dashboard')} className={`px-4 py-2 rounded-lg text-sm ${currentView === 'dashboard' ? 'bg-orange-700' : 'hover:bg-orange-700'}`}>{t('Dashboard')}</Link>
+                <Link to="/booth-management" onClick={() => setCurrentView('booth-management')} className={`px-4 py-2 rounded-lg text-sm ${currentView === 'booth-management' ? 'bg-orange-700' : 'hover:bg-orange-700'}`}>{t('Booths')}</Link>
+                <Link to="/campaign" onClick={() => setCurrentView('campaign')} className={`px-4 py-2 rounded-lg text-sm ${currentView === 'campaign' ? 'bg-orange-700' : 'hover:bg-orange-700'}`}>{t('Campaign')}</Link>
+                <Link to="/team" onClick={() => setCurrentView('team')} className={`px-4 py-2 rounded-lg text-sm ${currentView === 'team' ? 'bg-orange-700' : 'hover:bg-orange-700'}`}>{t('Team')}</Link>
+                <Link to="/reports" onClick={() => setCurrentView('reports')} className={`px-4 py-2 rounded-lg text-sm ${currentView === 'reports' ? 'bg-orange-700' : 'hover:bg-orange-700'}`}>{t('Reports')}</Link>
               </div>
 
               {/* Mobile hamburger */}
@@ -96,6 +101,10 @@ function App() {
                 <Link to="/home" onClick={() => { setCurrentView('home'); setMobileMenuOpen(false); }} className={`block px-3 py-2 rounded-lg ${currentView === 'home' ? 'bg-orange-700' : 'hover:bg-orange-700'}`}>{t('Home')}</Link>
                 <Link to="/upload" onClick={() => { setCurrentView('upload'); setMobileMenuOpen(false); }} className={`block px-3 py-2 rounded-lg ${currentView === 'upload' ? 'bg-orange-700' : 'hover:bg-orange-700'}`}>{t('Upload')}</Link>
                 <Link to="/dashboard" onClick={() => { setCurrentView('dashboard'); setMobileMenuOpen(false); }} className={`block px-3 py-2 rounded-lg ${currentView === 'dashboard' ? 'bg-orange-700' : 'hover:bg-orange-700'}`}>{t('Dashboard')}</Link>
+                <Link to="/booth-management" onClick={() => { setCurrentView('booth-management'); setMobileMenuOpen(false); }} className={`block px-3 py-2 rounded-lg ${currentView === 'booth-management' ? 'bg-orange-700' : 'hover:bg-orange-700'}`}>{t('Booths')}</Link>
+                <Link to="/campaign" onClick={() => { setCurrentView('campaign'); setMobileMenuOpen(false); }} className={`block px-3 py-2 rounded-lg ${currentView === 'campaign' ? 'bg-orange-700' : 'hover:bg-orange-700'}`}>{t('Campaign')}</Link>
+                <Link to="/team" onClick={() => { setCurrentView('team'); setMobileMenuOpen(false); }} className={`block px-3 py-2 rounded-lg ${currentView === 'team' ? 'bg-orange-700' : 'hover:bg-orange-700'}`}>{t('Team')}</Link>
+                <Link to="/reports" onClick={() => { setCurrentView('reports'); setMobileMenuOpen(false); }} className={`block px-3 py-2 rounded-lg ${currentView === 'reports' ? 'bg-orange-700' : 'hover:bg-orange-700'}`}>{t('Reports')}</Link>
                 <div className="pt-2 border-t border-white/10 mt-2">
                   <div className="text-sm font-medium mb-2">{t('Language')}</div>
                   {languages.map((lang) => (
@@ -114,13 +123,19 @@ function App() {
           />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/home" element={<Home />} />
-          
           <Route path="/voter/:voterId" element={<FullVoterDetails />} />
           <Route path="/" element={<Navigate to="/home" replace />} />
           <Route path="/lists" element={<StyledFilterPage />} />
           <Route path="/booth-management" element={<BoothManagement />} />
-<Route path="/lists/:mode" element={<ListModePage />} />
-
+          <Route path="/lists/:mode" element={<ListModePage />} />
+          
+          {/* New Routes for Campaign, Team, and Reports */}
+          <Route path="/campaign" element={<Campaign />} />
+          <Route path="/team" element={<Team />} />
+          <Route path="/reports" element={<Reports />} />
+          
+          {/* Catch all route - redirect to home */}
+          <Route path="*" element={<Navigate to="/home" replace />} />
         </Routes>
       </div>
     </Router>

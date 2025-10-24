@@ -53,8 +53,8 @@ const FullVoterDetails = () => {
 
   // Candidate branding information
   const candidateInfo = {
-    name: "RAJESH KUMAR",
-    party: "BHARATIYA JANTA PARTY",
+    name: "Akshay Bhaltilak",
+    party: "BJP",
     electionSymbol: "LOTUS",
     
   };
