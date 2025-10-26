@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { db, ref, onValue, off, update } from '../Firebase/config';
 import { 
   FiArrowLeft, 
@@ -24,8 +24,43 @@ import {
   FiSave,
   FiEdit2,
   FiEye,
-  FiEyeOff
+  FiEyeOff,
+  FiChevronLeft,
+  FiChevronRight
 } from 'react-icons/fi';
+
+// Load Balancer for Firebase operations
+class FirebaseLoadBalancer {
+  constructor(maxConcurrent = 3) {
+    this.maxConcurrent = maxConcurrent;
+    this.queue = [];
+    this.active = 0;
+  }
+
+  async execute(operation) {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ operation, resolve, reject });
+      this.process();
+    });
+  }
+
+  process() {
+    if (this.active >= this.maxConcurrent || this.queue.length === 0) return;
+
+    this.active++;
+    const { operation, resolve, reject } = this.queue.shift();
+
+    operation()
+      .then(resolve)
+      .catch(reject)
+      .finally(() => {
+        this.active--;
+        this.process();
+      });
+  }
+}
+
+const loadBalancer = new FirebaseLoadBalancer(3);
 
 const BoothManagement = () => {
   const [activeView, setActiveView] = useState('boothList');
@@ -66,9 +101,9 @@ const BoothListView = ({ onBoothSelect }) => {
   const [currentBooth, setCurrentBooth] = useState(null);
   const [message, setMessage] = useState('');
 
-  const createSafeId = (text) => {
+  const createSafeId = useCallback((text) => {
     return text.replace(/[.#$/[\]]/g, '_');
-  };
+  }, []);
 
   const processVoterData = useCallback((rawData) => {
     if (!rawData) return [];
@@ -125,7 +160,7 @@ const BoothListView = ({ onBoothSelect }) => {
     });
     
     return Object.values(boothsMap);
-  }, []);
+  }, [createSafeId]);
 
   useEffect(() => {
     setLoading(true);
@@ -134,55 +169,61 @@ const BoothListView = ({ onBoothSelect }) => {
     const boothsRef = ref(db, 'booths');
     
     const unsubscribeVoters = onValue(votersRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const votersData = processVoterData(snapshot.val());
-        setVoters(votersData);
-        
-        const boothsData = createBoothsFromVoters(votersData);
-        
-        const unsubscribeBooths = onValue(boothsRef, (boothSnapshot) => {
-          if (boothSnapshot.exists()) {
-            const boothAssignments = boothSnapshot.val();
-            
-            const updatedBooths = boothsData.map(booth => {
-              const assignment = boothAssignments[booth.id];
-              if (assignment) {
-                return {
-                  ...booth,
-                  assignedKaryakarta: assignment.assignedKaryakarta || '',
-                  karyakartaName: assignment.karyakartaName || '',
-                  karyakartaPhone: assignment.karyakartaPhone || '',
-                };
+      loadBalancer.execute(async () => {
+        if (snapshot.exists()) {
+          const votersData = processVoterData(snapshot.val());
+          setVoters(votersData);
+          
+          const boothsData = createBoothsFromVoters(votersData);
+          
+          const unsubscribeBooths = onValue(boothsRef, (boothSnapshot) => {
+            loadBalancer.execute(() => {
+              if (boothSnapshot.exists()) {
+                const boothAssignments = boothSnapshot.val();
+                
+                const updatedBooths = boothsData.map(booth => {
+                  const assignment = boothAssignments[booth.id];
+                  if (assignment) {
+                    return {
+                      ...booth,
+                      assignedKaryakarta: assignment.assignedKaryakarta || '',
+                      karyakartaName: assignment.karyakartaName || '',
+                      karyakartaPhone: assignment.karyakartaPhone || '',
+                    };
+                  }
+                  return booth;
+                });
+                
+                setBooths(updatedBooths);
+              } else {
+                setBooths(boothsData);
               }
-              return booth;
+              setLoading(false);
             });
-            
-            setBooths(updatedBooths);
-          } else {
-            setBooths(boothsData);
-          }
-          setLoading(false);
-        });
+          });
 
-        return () => off(boothsRef, 'value', unsubscribeBooths);
-      } else {
-        setVoters([]);
-        setBooths([]);
-        setLoading(false);
-      }
+          return () => off(boothsRef, 'value', unsubscribeBooths);
+        } else {
+          setVoters([]);
+          setBooths([]);
+          setLoading(false);
+        }
+      });
     });
 
     const unsubscribeKaryakartas = onValue(karyakartasRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const karyakartasData = Object.entries(snapshot.val()).map(([key, value]) => ({
-          id: key,
-          name: value.name || 'Unknown Karyakarta',
-          phone: value.phone || '',
-        }));
-        setKaryakartas(karyakartasData);
-      } else {
-        setKaryakartas([]);
-      }
+      loadBalancer.execute(() => {
+        if (snapshot.exists()) {
+          const karyakartasData = Object.entries(snapshot.val()).map(([key, value]) => ({
+            id: key,
+            name: value.name || 'Unknown Karyakarta',
+            phone: value.phone || '',
+          }));
+          setKaryakartas(karyakartasData);
+        } else {
+          setKaryakartas([]);
+        }
+      });
     });
 
     return () => {
@@ -191,11 +232,14 @@ const BoothListView = ({ onBoothSelect }) => {
     };
   }, [processVoterData, createBoothsFromVoters]);
 
-  const filteredBooths = booths.filter(booth => 
-    !searchTerm.trim() ||
-    booth.pollingStationAddress.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    booth.village.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (booth.karyakartaName && booth.karyakartaName.toLowerCase().includes(searchTerm.toLowerCase()))
+  const filteredBooths = useMemo(() => 
+    booths.filter(booth => 
+      !searchTerm.trim() ||
+      booth.pollingStationAddress.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      booth.village.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (booth.karyakartaName && booth.karyakartaName.toLowerCase().includes(searchTerm.toLowerCase()))
+    ),
+    [booths, searchTerm]
   );
 
   const handleAssignKaryakarta = async () => {
@@ -212,43 +256,45 @@ const BoothListView = ({ onBoothSelect }) => {
         return;
       }
 
-      const updates = {};
-      const boothId = currentBooth.id;
+      await loadBalancer.execute(async () => {
+        const updates = {};
+        const boothId = currentBooth.id;
 
-      updates[`booths/${boothId}`] = {
-        assignedKaryakarta: selectedKaryakarta,
-        karyakartaName: karyakarta.name,
-        karyakartaPhone: karyakarta.phone,
-        pollingStationAddress: currentBooth.pollingStationAddress,
-        village: currentBooth.village,
-        lastUpdated: new Date().toISOString()
-      };
+        updates[`booths/${boothId}`] = {
+          assignedKaryakarta: selectedKaryakarta,
+          karyakartaName: karyakarta.name,
+          karyakartaPhone: karyakarta.phone,
+          pollingStationAddress: currentBooth.pollingStationAddress,
+          village: currentBooth.village,
+          lastUpdated: new Date().toISOString()
+        };
 
-      const boothVoters = voters.filter(voter => 
-        createSafeId(voter.pollingStationAddress) === boothId
-      );
-      
-      boothVoters.forEach(voter => {
-        updates[`voters/${voter.id}/assignedKaryakarta`] = selectedKaryakarta;
+        const boothVoters = voters.filter(voter => 
+          createSafeId(voter.pollingStationAddress) === boothId
+        );
+        
+        boothVoters.forEach(voter => {
+          updates[`voters/${voter.id}/assignedKaryakarta`] = selectedKaryakarta;
+        });
+
+        await update(ref(db), updates);
+        
+        setBooths(prev => prev.map(booth => 
+          booth.id === boothId 
+            ? {
+                ...booth,
+                assignedKaryakarta: selectedKaryakarta,
+                karyakartaName: karyakarta.name,
+                karyakartaPhone: karyakarta.phone
+              }
+            : booth
+        ));
+
+        setShowKaryakartaModal(false);
+        setSelectedKaryakarta('');
+        setCurrentBooth(null);
+        setMessage(`✅ ${karyakarta.name} assigned successfully!`);
       });
-
-      await update(ref(db), updates);
-      
-      setBooths(prev => prev.map(booth => 
-        booth.id === boothId 
-          ? {
-              ...booth,
-              assignedKaryakarta: selectedKaryakarta,
-              karyakartaName: karyakarta.name,
-              karyakartaPhone: karyakarta.phone
-            }
-          : booth
-      ));
-
-      setShowKaryakartaModal(false);
-      setSelectedKaryakarta('');
-      setCurrentBooth(null);
-      setMessage(`✅ ${karyakarta.name} assigned successfully!`);
       
     } catch (error) {
       console.error('Error assigning karyakarta:', error);
@@ -514,37 +560,227 @@ const BoothListView = ({ onBoothSelect }) => {
   );
 };
 
+// Swipeable Voter Card Component
+const SwipeableVoterCard = ({ voter, onSwipe, onEdit, onContact, isSelected, onToggleSelect }) => {
+  const [startX, setStartX] = useState(0);
+  const [currentX, setCurrentX] = useState(0);
+  const [isSwiping, setIsSwiping] = useState(false);
+
+  const handleTouchStart = (e) => {
+    setStartX(e.touches[0].clientX);
+    setIsSwiping(true);
+  };
+
+  const handleTouchMove = (e) => {
+    if (!isSwiping) return;
+    const currentX = e.touches[0].clientX;
+    setCurrentX(currentX);
+  };
+
+  const handleTouchEnd = () => {
+    if (!isSwiping) return;
+    
+    const diff = currentX - startX;
+    const swipeThreshold = 60; // Minimum swipe distance
+    
+    if (diff > swipeThreshold) {
+      // Swipe right - mark as voted
+      onSwipe(voter.id, !voter.voted);
+    } else if (diff < -swipeThreshold) {
+      // Swipe left - mark as not voted
+      onSwipe(voter.id, !voter.voted);
+    }
+    
+    setIsSwiping(false);
+    setCurrentX(0);
+  };
+
+  const swipeOffset = isSwiping ? currentX - startX : 0;
+  const isSwipingRight = swipeOffset > 0;
+  const isSwipingLeft = swipeOffset < 0;
+
+  const getSupportLevelColor = (level) => {
+    switch (level) {
+      case 'supporter': return 'bg-green-500';
+      case 'opposed': return 'bg-red-500';
+      default: return 'bg-yellow-500';
+    }
+  };
+
+  const getSupportLevelIcon = (level) => {
+    switch (level) {
+      case 'supporter': return '👍';
+      case 'opposed': return '👎';
+      default: return '😐';
+    }
+  };
+
+  return (
+    <div 
+      className={`relative bg-white rounded-xl border p-3 transition-all duration-200 ${
+        isSelected 
+          ? 'border-orange-500 bg-orange-50 shadow-md' 
+          : 'border-orange-200 hover:border-orange-300'
+      } ${isSwiping ? 'active:scale-95' : ''}`}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+    >
+      {/* Swipe Background Indicators */}
+      <div className={`absolute inset-0 rounded-xl transition-opacity duration-200 ${
+        isSwipingRight ? 'bg-green-100 opacity-100' : 
+        isSwipingLeft ? 'bg-red-100 opacity-100' : 'opacity-0'
+      }`}>
+        <div className="flex items-center justify-center h-full">
+          <span className={`text-lg font-bold ${
+            isSwipingRight ? 'text-green-600' : 'text-red-600'
+          }`}>
+            {isSwipingRight ? 'Mark Voted →' : '← Mark Not Voted'}
+          </span>
+        </div>
+      </div>
+
+      {/* Voter Content */}
+      <div 
+        className={`relative transition-transform duration-200 ${
+          isSwiping ? 'scale-95' : 'scale-100'
+        }`}
+        style={{ transform: `translateX(${swipeOffset * 0.3}px)` }}
+      >
+        <div className="flex items-start gap-3">
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => onToggleSelect(voter.id)}
+            className="mt-1 text-orange-600 focus:ring-orange-500 scale-110 flex-shrink-0"
+          />
+          
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
+              <h3 className="font-semibold text-gray-900 text-sm truncate flex-1 min-w-[120px]">
+                {voter.name}
+              </h3>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                {/* Voting Status Badge */}
+                <span className={`px-2 py-1 rounded text-xs font-medium flex items-center gap-1 ${
+                  voter.voted 
+                    ? 'bg-green-100 text-green-800 border border-green-200' 
+                    : 'bg-gray-100 text-gray-600 border border-gray-200'
+                }`}>
+                  {voter.voted ? <FiEye size={12} /> : <FiEyeOff size={12} />}
+                  {voter.voted ? 'Voted' : 'Not Voted'}
+                </span>
+                
+                {/* Support Level Badge */}
+                <span className={`px-2 py-1 rounded text-xs font-medium border ${getSupportLevelColor(voter.supportLevel)} text-white`}>
+                  {getSupportLevelIcon(voter.supportLevel)}
+                </span>
+              </div>
+            </div>
+            
+            <div className="space-y-1 text-gray-600 text-xs">
+              <div className="flex items-center gap-2 justify-between">
+                <span className="font-medium">ID: {voter.voterId}</span>
+                {voter.age && <span>Age: {voter.age}</span>}
+              </div>
+              
+              <div className="flex items-center gap-3 flex-wrap">
+                {voter.phone ? (
+                  <div className="flex items-center gap-1 text-green-600">
+                    <FiPhone size={12} />
+                    <span>{voter.phone}</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1 text-gray-400">
+                    <FiPhoneOff size={12} />
+                    <span>No Phone</span>
+                  </div>
+                )}
+                
+                {voter.houseNumber && (
+                  <div className="flex items-center gap-1">
+                    <FiHome size={12} />
+                    <span>House: {voter.houseNumber}</span>
+                  </div>
+                )}
+              </div>
+
+              {voter.lastContacted && (
+                <div className="flex items-center gap-1 text-gray-500">
+                  <FiCalendar size={12} />
+                  <span>Contacted: {new Date(voter.lastContacted).toLocaleDateString()}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1 flex-shrink-0">
+            {voter.phone && (
+              <button
+                onClick={() => onContact(voter)}
+                className="text-orange-600 hover:text-orange-700 p-1.5 bg-orange-100 rounded-lg transition-all active:scale-95"
+                title="Send Message"
+              >
+                <FiMessageCircle size={14} />
+              </button>
+            )}
+            <button
+              onClick={() => onEdit(voter)}
+              className="text-blue-600 hover:text-blue-700 p-1.5 bg-blue-100 rounded-lg transition-all active:scale-95"
+              title="Edit Voter"
+            >
+              <FiEdit2 size={14} />
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const BoothDetailView = ({ booth, onBack }) => {
   const [voters, setVoters] = useState(booth.voters || []);
   const [searchTerm, setSearchTerm] = useState('');
-  const [filter, setFilter] = useState('all');
+  const [activeCategory, setActiveCategory] = useState('all');
   const [selectedVoters, setSelectedVoters] = useState([]);
   const [campaignMessage, setCampaignMessage] = useState('');
   const [showCampaignModal, setShowCampaignModal] = useState(false);
-  const [showFilters, setShowFilters] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [editingVoter, setEditingVoter] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [bulkAction, setBulkAction] = useState('');
 
-  const filteredVoters = voters.filter(voter => {
-    if (searchTerm && !voter.name.toLowerCase().includes(searchTerm.toLowerCase()) && 
-        !voter.voterId.toLowerCase().includes(searchTerm.toLowerCase()) &&
-        !voter.phone.includes(searchTerm)) {
-      return false;
-    }
+  // Categorized voters
+  const categorizedVoters = useMemo(() => {
+    const filtered = voters.filter(voter => {
+      if (searchTerm && !voter.name.toLowerCase().includes(searchTerm.toLowerCase()) && 
+          !voter.voterId.toLowerCase().includes(searchTerm.toLowerCase()) &&
+          !voter.phone.includes(searchTerm)) {
+        return false;
+      }
+      
+      switch (activeCategory) {
+        case 'voted': return voter.voted;
+        case 'notVoted': return !voter.voted;
+        case 'withPhone': return voter.phone;
+        case 'withoutPhone': return !voter.phone;
+        case 'supporters': return voter.supportLevel === 'supporter';
+        case 'neutral': return voter.supportLevel === 'neutral';
+        case 'opposed': return voter.supportLevel === 'opposed';
+        default: return true;
+      }
+    });
     
-    switch (filter) {
-      case 'voted': return voter.voted;
-      case 'notVoted': return !voter.voted;
-      case 'withPhone': return voter.phone;
-      case 'withoutPhone': return !voter.phone;
-      case 'supporters': return voter.supportLevel === 'supporter';
-      case 'neutral': return voter.supportLevel === 'neutral';
-      case 'opposed': return voter.supportLevel === 'opposed';
-      default: return true;
-    }
-  });
+    return filtered;
+  }, [voters, searchTerm, activeCategory]);
+
+  const categories = [
+    { key: 'all', label: 'All', count: voters.length },
+    { key: 'voted', label: 'Voted', count: voters.filter(v => v.voted).length },
+    { key: 'notVoted', label: 'Not Voted', count: voters.filter(v => !v.voted).length },
+    { key: 'withPhone', label: 'With Phone', count: voters.filter(v => v.phone).length },
+    { key: 'supporters', label: 'Supporters', count: voters.filter(v => v.supportLevel === 'supporter').length },
+  ];
 
   const toggleVoterSelection = (voterId) => {
     setSelectedVoters(prev => 
@@ -555,15 +791,17 @@ const BoothDetailView = ({ booth, onBack }) => {
   };
 
   const selectAllVoters = () => {
-    setSelectedVoters(selectedVoters.length === filteredVoters.length ? [] : filteredVoters.map(v => v.id));
+    setSelectedVoters(selectedVoters.length === categorizedVoters.length ? [] : categorizedVoters.map(v => v.id));
   };
 
-  const toggleVotedStatus = async (voterId, currentStatus) => {
+  const handleSwipeVoter = async (voterId, newVotedStatus) => {
     try {
-      await update(ref(db, `voters/${voterId}/voted`), !currentStatus);
-      setVoters(prev => prev.map(voter => 
-        voter.id === voterId ? { ...voter, voted: !currentStatus } : voter
-      ));
+      await loadBalancer.execute(async () => {
+        await update(ref(db, `voters/${voterId}/voted`), newVotedStatus);
+        setVoters(prev => prev.map(voter => 
+          voter.id === voterId ? { ...voter, voted: newVotedStatus } : voter
+        ));
+      });
     } catch (error) {
       console.error('Error updating voted status:', error);
     }
@@ -571,17 +809,19 @@ const BoothDetailView = ({ booth, onBack }) => {
 
   const bulkUpdateVotedStatus = async (status) => {
     try {
-      const updates = {};
-      selectedVoters.forEach(id => {
-        updates[`voters/${id}/voted`] = status;
+      await loadBalancer.execute(async () => {
+        const updates = {};
+        selectedVoters.forEach(id => {
+          updates[`voters/${id}/voted`] = status;
+        });
+        await update(ref(db), updates);
+        
+        setVoters(prev => prev.map(voter => 
+          selectedVoters.includes(voter.id) ? { ...voter, voted: status } : voter
+        ));
+        setSelectedVoters([]);
+        setBulkAction('');
       });
-      await update(ref(db), updates);
-      
-      setVoters(prev => prev.map(voter => 
-        selectedVoters.includes(voter.id) ? { ...voter, voted: status } : voter
-      ));
-      setSelectedVoters([]);
-      setBulkAction('');
     } catch (error) {
       console.error('Error bulk updating voted status:', error);
     }
@@ -589,10 +829,12 @@ const BoothDetailView = ({ booth, onBack }) => {
 
   const updateSupportLevel = async (voterId, level) => {
     try {
-      await update(ref(db, `voters/${voterId}/supportLevel`), level);
-      setVoters(prev => prev.map(voter => 
-        voter.id === voterId ? { ...voter, supportLevel: level } : voter
-      ));
+      await loadBalancer.execute(async () => {
+        await update(ref(db, `voters/${voterId}/supportLevel`), level);
+        setVoters(prev => prev.map(voter => 
+          voter.id === voterId ? { ...voter, supportLevel: level } : voter
+        ));
+      });
     } catch (error) {
       console.error('Error updating support level:', error);
     }
@@ -614,17 +856,19 @@ const BoothDetailView = ({ booth, onBack }) => {
     if (!editingVoter) return;
     
     try {
-      const updates = {};
-      Object.keys(editForm).forEach(key => {
-        updates[`voters/${editingVoter.id}/${key}`] = editForm[key];
+      await loadBalancer.execute(async () => {
+        const updates = {};
+        Object.keys(editForm).forEach(key => {
+          updates[`voters/${editingVoter.id}/${key}`] = editForm[key];
+        });
+        await update(ref(db), updates);
+        
+        setVoters(prev => prev.map(voter => 
+          voter.id === editingVoter.id ? { ...voter, ...editForm } : voter
+        ));
+        setEditingVoter(null);
+        setEditForm({});
       });
-      await update(ref(db), updates);
-      
-      setVoters(prev => prev.map(voter => 
-        voter.id === editingVoter.id ? { ...voter, ...editForm } : voter
-      ));
-      setEditingVoter(null);
-      setEditForm({});
     } catch (error) {
       console.error('Error updating voter:', error);
     }
@@ -634,45 +878,27 @@ const BoothDetailView = ({ booth, onBack }) => {
     if (!campaignMessage.trim()) return;
     
     try {
-      const updates = {};
-      const timestamp = new Date().toISOString();
-      selectedVoters.forEach(voterId => {
-        updates[`voters/${voterId}/lastContacted`] = timestamp;
-        updates[`voters/${voterId}/lastCampaign`] = campaignMessage;
+      await loadBalancer.execute(async () => {
+        const updates = {};
+        const timestamp = new Date().toISOString();
+        selectedVoters.forEach(voterId => {
+          updates[`voters/${voterId}/lastContacted`] = timestamp;
+          updates[`voters/${voterId}/lastCampaign`] = campaignMessage;
+        });
+        await update(ref(db), updates);
+        
+        setVoters(prev => prev.map(voter => 
+          selectedVoters.includes(voter.id) 
+            ? { ...voter, lastContacted: timestamp }
+            : voter
+        ));
+        
+        setCampaignMessage('');
+        setShowCampaignModal(false);
+        setSelectedVoters([]);
       });
-      await update(ref(db), updates);
-      
-      setVoters(prev => prev.map(voter => 
-        selectedVoters.includes(voter.id) 
-          ? { ...voter, lastContacted: timestamp }
-          : voter
-      ));
-      
-      setCampaignMessage('');
-      setShowCampaignModal(false);
-      setSelectedVoters([]);
     } catch (error) {
       console.error('Error sending campaign:', error);
-    }
-  };
-
-  const deleteBoothAndVoters = async () => {
-    try {
-      const updates = {};
-      
-      updates[`booths/${booth.id}`] = null;
-      
-      booth.voters.forEach(voter => {
-        updates[`voters/${voter.id}`] = null;
-      });
-      
-      await update(ref(db), updates);
-      
-      alert('बूथ आणि त्यातील सर्व मतदार यशस्वीरित्या हटवले गेले!');
-      onBack();
-    } catch (error) {
-      console.error('Error deleting booth:', error);
-      alert('बूथ हटवण्यात त्रुटी आली. कृपया पुन्हा प्रयत्न करा.');
     }
   };
 
@@ -681,24 +907,6 @@ const BoothDetailView = ({ booth, onBack }) => {
     voted: voters.filter(v => v.voted).length,
     withPhone: voters.filter(v => v.phone).length,
     supporters: voters.filter(v => v.supportLevel === 'supporter').length,
-    neutral: voters.filter(v => v.supportLevel === 'neutral').length,
-    opposed: voters.filter(v => v.supportLevel === 'opposed').length,
-  };
-
-  const getSupportLevelColor = (level) => {
-    switch (level) {
-      case 'supporter': return 'text-green-600 bg-green-100 border-green-200';
-      case 'opposed': return 'text-red-600 bg-red-100 border-red-200';
-      default: return 'text-yellow-600 bg-yellow-100 border-yellow-200';
-    }
-  };
-
-  const getSupportLevelIcon = (level) => {
-    switch (level) {
-      case 'supporter': return '👍';
-      case 'opposed': return '👎';
-      default: return '😐';
-    }
   };
 
   return (
@@ -730,7 +938,7 @@ const BoothDetailView = ({ booth, onBack }) => {
           </div>
 
           {/* Stats */}
-          <div className="grid grid-cols-4 gap-2 text-center">
+          <div className="grid grid-cols-4 gap-2 text-center mb-4">
             <div className="bg-white/20 rounded-xl p-2">
               <div className="font-bold text-sm">{stats.total}</div>
               <div className="text-orange-100 text-xs">Total</div>
@@ -748,10 +956,8 @@ const BoothDetailView = ({ booth, onBack }) => {
               <div className="text-orange-100 text-xs">Supporters</div>
             </div>
           </div>
-        </div>
 
-        {/* Search and Actions */}
-        <div className="px-4 pb-4">
+          {/* Search Bar */}
           <div className="flex gap-2 mb-3">
             <div className="flex-1 relative">
               <FiSearch className="absolute left-3 top-3 text-orange-300" />
@@ -763,188 +969,106 @@ const BoothDetailView = ({ booth, onBack }) => {
                 className="w-full pl-10 pr-4 py-3 bg-white/20 rounded-xl border border-white/30 text-white placeholder-orange-200 focus:outline-none focus:ring-2 focus:ring-white/50 text-base"
               />
             </div>
-            <button
-              onClick={() => setShowFilters(!showFilters)}
-              className="bg-white/20 text-white p-3 rounded-xl hover:bg-white/30 active:scale-95"
-            >
-              <FiFilter size={18} />
-            </button>
           </div>
-
-          {/* Filters */}
-          {showFilters && (
-            <div className="mb-3">
-              <select
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-                className="w-full bg-white/20 border border-white/30 rounded-xl px-3 py-3 text-white focus:outline-none focus:ring-2 focus:ring-white/50 text-base"
-              >
-                <option value="all">All Voters</option>
-                <option value="voted">Voted</option>
-                <option value="notVoted">Not Voted</option>
-                <option value="withPhone">With Phone</option>
-                <option value="withoutPhone">Without Phone</option>
-                <option value="supporters">Supporters</option>
-                <option value="neutral">Neutral</option>
-                <option value="opposed">Opposed</option>
-              </select>
-            </div>
-          )}
-
-          {selectedVoters.length > 0 && (
-            <div className="space-y-2">
-              <div className="flex gap-2">
-                <button
-                  onClick={selectAllVoters}
-                  className="bg-white/20 text-white px-3 py-2 rounded-lg text-sm hover:bg-white/30 active:scale-95"
-                >
-                  {selectedVoters.length === filteredVoters.length ? 'Deselect All' : 'Select All'}
-                </button>
-                <select
-                  value={bulkAction}
-                  onChange={(e) => {
-                    setBulkAction(e.target.value);
-                    if (e.target.value === 'markVoted') {
-                      bulkUpdateVotedStatus(true);
-                    } else if (e.target.value === 'markNotVoted') {
-                      bulkUpdateVotedStatus(false);
-                    }
-                  }}
-                  className="flex-1 bg-white/20 text-white px-3 py-2 rounded-lg text-sm focus:outline-none"
-                >
-                  <option value="">Bulk Actions</option>
-                  <option value="markVoted">Mark as Voted</option>
-                  <option value="markNotVoted">Mark as Not Voted</option>
-                </select>
-              </div>
-              <button
-                onClick={() => setShowCampaignModal(true)}
-                className="w-full bg-orange-500 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-orange-600 active:scale-95 flex items-center justify-center gap-1"
-              >
-                <FiMessageCircle />
-                Contact ({selectedVoters.length})
-              </button>
-            </div>
-          )}
         </div>
       </div>
 
+      {/* Categories */}
+      <div className="px-4 -mt-2 mb-3">
+        <div className="bg-white rounded-2xl shadow-lg border border-orange-200 p-1">
+          <div className="flex space-x-1 overflow-x-auto scrollbar-hide">
+            {categories.map((category) => (
+              <button
+                key={category.key}
+                onClick={() => setActiveCategory(category.key)}
+                className={`flex-1 min-w-0 px-3 py-2 rounded-xl text-xs font-medium transition-all whitespace-nowrap ${
+                  activeCategory === category.key
+                    ? 'bg-orange-500 text-white shadow-md'
+                    : 'text-gray-600 hover:bg-orange-50'
+                }`}
+              >
+                <div className="flex items-center justify-center gap-1">
+                  <span>{category.label}</span>
+                  <span className={`px-1.5 py-0.5 rounded-full text-xs ${
+                    activeCategory === category.key
+                      ? 'bg-white text-orange-500'
+                      : 'bg-orange-100 text-orange-600'
+                  }`}>
+                    {category.count}
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Bulk Actions */}
+      {selectedVoters.length > 0 && (
+        <div className="px-4 mb-3">
+          <div className="bg-blue-50 rounded-2xl border border-blue-200 p-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-blue-800 font-medium text-sm">
+                {selectedVoters.length} voters selected
+              </span>
+              <button
+                onClick={selectAllVoters}
+                className="text-blue-600 text-xs font-medium hover:text-blue-700"
+              >
+                {selectedVoters.length === categorizedVoters.length ? 'Deselect All' : 'Select All'}
+              </button>
+            </div>
+            <div className="flex gap-2">
+              <select
+                value={bulkAction}
+                onChange={(e) => {
+                  setBulkAction(e.target.value);
+                  if (e.target.value === 'markVoted') {
+                    bulkUpdateVotedStatus(true);
+                  } else if (e.target.value === 'markNotVoted') {
+                    bulkUpdateVotedStatus(false);
+                  }
+                }}
+                className="flex-1 bg-white border border-blue-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">Bulk Actions</option>
+                <option value="markVoted">Mark as Voted</option>
+                <option value="markNotVoted">Mark as Not Voted</option>
+              </select>
+              <button
+                onClick={() => setShowCampaignModal(true)}
+                className="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-600 active:scale-95 flex items-center gap-1"
+              >
+                <FiMessageCircle size={14} />
+                Contact
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Voters List */}
-      <div className="p-3 space-y-2">
-        {filteredVoters.length === 0 ? (
+      <div className="px-3 space-y-2">
+        {categorizedVoters.length === 0 ? (
           <div className="text-center py-12 bg-white rounded-2xl shadow border border-orange-200 mx-1">
             <FiUsers className="inline text-orange-300 text-4xl mb-3" />
             <p className="text-orange-600">No voters found</p>
+            <p className="text-orange-400 text-sm mt-1">Swipe right on voter cards to mark as voted</p>
           </div>
         ) : (
-          filteredVoters.map((voter) => (
-            <div
+          categorizedVoters.map((voter) => (
+            <SwipeableVoterCard
               key={voter.id}
-              className={`bg-white rounded-xl border p-3 transition-all ${
-                selectedVoters.includes(voter.id) 
-                  ? 'border-orange-500 bg-orange-50 shadow-md' 
-                  : 'border-orange-200 hover:border-orange-300'
-              } active:scale-[0.98]`}
-            >
-              <div className="flex items-start gap-3">
-                <input
-                  type="checkbox"
-                  checked={selectedVoters.includes(voter.id)}
-                  onChange={() => toggleVoterSelection(voter.id)}
-                  className="mt-1 text-orange-600 focus:ring-orange-500 scale-110 flex-shrink-0"
-                />
-                
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1 flex-wrap">
-                    <h3 className="font-semibold text-gray-900 text-sm truncate flex-1 min-w-[120px]">
-                      {voter.name}
-                    </h3>
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      {/* Toggle Voted Status Button */}
-                      <button
-                        onClick={() => toggleVotedStatus(voter.id, voter.voted)}
-                        className={`px-2 py-1 rounded text-xs font-medium flex items-center gap-1 ${
-                          voter.voted 
-                            ? 'bg-green-100 text-green-800 border border-green-200' 
-                            : 'bg-gray-100 text-gray-600 border border-gray-200'
-                        }`}
-                      >
-                        {voter.voted ? <FiEye size={12} /> : <FiEyeOff size={12} />}
-                        {voter.voted ? 'Voted' : 'Not Voted'}
-                      </button>
-                      
-                      {/* Support Level Button */}
-                      <button
-                        onClick={() => updateSupportLevel(voter.id, 
-                          voter.supportLevel === 'supporter' ? 'neutral' : 
-                          voter.supportLevel === 'neutral' ? 'opposed' : 'supporter'
-                        )}
-                        className={`px-2 py-1 rounded text-xs font-medium border ${getSupportLevelColor(voter.supportLevel)}`}
-                      >
-                        {getSupportLevelIcon(voter.supportLevel)}
-                      </button>
-                    </div>
-                  </div>
-                  
-                  <div className="space-y-1 text-gray-600 text-xs">
-                    <div className="flex items-center gap-2 justify-between">
-                      <span>ID: {voter.voterId}</span>
-                      {voter.age && <span>Age: {voter.age}</span>}
-                    </div>
-                    
-                    <div className="flex items-center gap-3 flex-wrap">
-                      {voter.phone ? (
-                        <div className="flex items-center gap-1 text-green-600">
-                          <FiPhone size={12} />
-                          <span>{voter.phone}</span>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-1 text-gray-400">
-                          <FiPhoneOff size={12} />
-                          <span>No Phone</span>
-                        </div>
-                      )}
-                      
-                      {voter.houseNumber && (
-                        <div className="flex items-center gap-1">
-                          <FiHome size={12} />
-                          <span>House: {voter.houseNumber}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    {voter.lastContacted && (
-                      <div className="flex items-center gap-1 text-gray-500">
-                        <FiCalendar size={12} />
-                        <span>Contacted: {new Date(voter.lastContacted).toLocaleDateString()}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex flex-col gap-1 flex-shrink-0">
-                  {voter.phone && (
-                    <button
-                      onClick={() => {
-                        setSelectedVoters([voter.id]);
-                        setShowCampaignModal(true);
-                      }}
-                      className="text-orange-600 hover:text-orange-700 p-1.5 bg-orange-100 rounded-lg transition-all active:scale-95"
-                      title="Send Message"
-                    >
-                      <FiMessageCircle size={14} />
-                    </button>
-                  )}
-                  <button
-                    onClick={() => handleEditVoter(voter)}
-                    className="text-blue-600 hover:text-blue-700 p-1.5 bg-blue-100 rounded-lg transition-all active:scale-95"
-                    title="Edit Voter"
-                  >
-                    <FiEdit2 size={14} />
-                  </button>
-                </div>
-              </div>
-            </div>
+              voter={voter}
+              onSwipe={handleSwipeVoter}
+              onEdit={handleEditVoter}
+              onContact={(voter) => {
+                setSelectedVoters([voter.id]);
+                setShowCampaignModal(true);
+              }}
+              isSelected={selectedVoters.includes(voter.id)}
+              onToggleSelect={toggleVoterSelection}
+            />
           ))
         )}
       </div>
