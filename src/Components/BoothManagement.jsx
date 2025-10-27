@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { db, ref, onValue, off, update } from '../Firebase/config';
 import { 
   FiArrowLeft, 
@@ -26,8 +26,317 @@ import {
   FiEye,
   FiEyeOff,
   FiCheckCircle,
-  FiClock
+  FiClock,
+  FiRefreshCw
 } from 'react-icons/fi';
+
+// Load Balancer for Firebase operations
+class FirebaseLoadBalancer {
+  constructor(maxConcurrent = 3) {
+    this.maxConcurrent = maxConcurrent;
+    this.queue = [];
+    this.active = 0;
+  }
+
+  async execute(operation) {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ operation, resolve, reject });
+      this.process();
+    });
+  }
+
+  process() {
+    if (this.active >= this.maxConcurrent || this.queue.length === 0) return;
+
+    this.active++;
+    const { operation, resolve, reject } = this.queue.shift();
+
+    operation()
+      .then(resolve)
+      .catch(reject)
+      .finally(() => {
+        this.active--;
+        this.process();
+      });
+  }
+}
+
+const firebaseLoadBalancer = new FirebaseLoadBalancer(3);
+
+// Performance Optimized Swipe Handler
+const useSwipe = (onSwipeLeft, onSwipeRight, sensitivity = 50) => {
+  const touchStart = useRef(null);
+  const touchEnd = useRef(null);
+  const [isSwiping, setIsSwiping] = useState(false);
+  const [swipeDistance, setSwipeDistance] = useState(0);
+
+  const minSwipeDistance = sensitivity;
+
+  const onTouchStart = (e) => {
+    touchEnd.current = null;
+    touchStart.current = e.targetTouches[0].clientX;
+    setIsSwiping(true);
+  };
+
+  const onTouchMove = (e) => {
+    if (!touchStart.current) return;
+    touchEnd.current = e.targetTouches[0].clientX;
+    const distance = touchStart.current - touchEnd.current;
+    setSwipeDistance(distance);
+  };
+
+  const onTouchEnd = () => {
+    if (!touchStart.current || !touchEnd.current) return;
+    
+    const distance = touchStart.current - touchEnd.current;
+    const isLeftSwipe = distance > minSwipeDistance;
+    const isRightSwipe = distance < -minSwipeDistance;
+
+    if (isLeftSwipe) {
+      onSwipeLeft();
+    } else if (isRightSwipe) {
+      onSwipeRight();
+    }
+
+    touchStart.current = null;
+    touchEnd.current = null;
+    setIsSwiping(false);
+    setSwipeDistance(0);
+  };
+
+  return {
+    isSwiping,
+    swipeDistance,
+    swipeHandlers: {
+      onTouchStart,
+      onTouchMove,
+      onTouchEnd,
+    }
+  };
+};
+
+// Optimized Voter Item with Memoization
+const VoterItem = React.memo(({ 
+  voter, 
+  isSelected, 
+  onToggleSelect, 
+  onToggleVoted, 
+  onUpdateSupport, 
+  onEdit, 
+  onMessage,
+  onDoubleTap 
+}) => {
+  const [isTapped, setIsTapped] = useState(false);
+  const tapTimerRef = useRef(null);
+
+  const handleSwipeLeft = useCallback(() => {
+    if (!voter.voted) {
+      onToggleVoted(voter.id, voter.voted);
+    }
+  }, [voter.id, voter.voted, onToggleVoted]);
+
+  const handleSwipeRight = useCallback(() => {
+    if (voter.voted) {
+      onToggleVoted(voter.id, voter.voted);
+    }
+  }, [voter.id, voter.voted, onToggleVoted]);
+
+  const { isSwiping, swipeDistance, swipeHandlers } = useSwipe(
+    handleSwipeLeft,
+    handleSwipeRight,
+    40 // Higher sensitivity for easier swiping
+  );
+
+  const handleClick = useCallback(() => {
+    setIsTapped(true);
+    
+    if (tapTimerRef.current) {
+      clearTimeout(tapTimerRef.current);
+      onDoubleTap(voter);
+      setIsTapped(false);
+    } else {
+      tapTimerRef.current = setTimeout(() => {
+        setIsTapped(false);
+        tapTimerRef.current = null;
+      }, 300);
+    }
+  }, [voter, onDoubleTap]);
+
+  const getSupportLevelColor = (level) => {
+    switch (level) {
+      case 'supporter': return 'text-green-600 bg-green-100 border-green-200';
+      case 'opposed': return 'text-red-600 bg-red-100 border-red-200';
+      default: return 'text-yellow-600 bg-yellow-100 border-yellow-200';
+    }
+  };
+
+  const getSupportLevelIcon = (level) => {
+    switch (level) {
+      case 'supporter': return '👍';
+      case 'opposed': return '👎';
+      default: return '😐';
+    }
+  };
+
+  const swipeTransform = isSwiping 
+    ? `translateX(${swipeDistance * 0.5}px)` 
+    : 'translateX(0)';
+
+  const swipeOpacity = isSwiping 
+    ? Math.max(0.7, 1 - Math.abs(swipeDistance) / 200) 
+    : 1;
+
+  return (
+    <div
+      className={`bg-white/90 backdrop-blur-sm rounded-2xl border p-4 transition-all duration-200 ${
+        isSelected 
+          ? 'border-orange-500 bg-orange-50 shadow-lg transform scale-[1.02]' 
+          : 'border-orange-200 hover:border-orange-300 hover:shadow-md'
+      } ${isTapped ? 'scale-95' : ''}`}
+      style={{
+        transform: swipeTransform,
+        opacity: swipeOpacity,
+      }}
+      onClick={handleClick}
+      {...swipeHandlers}
+    >
+      {/* Swipe Visual Feedback */}
+      {isSwiping && (
+        <div className={`absolute inset-0 rounded-2xl flex items-center justify-center font-bold text-white text-sm ${
+          swipeDistance > 0 ? 'bg-red-500' : swipeDistance < 0 ? 'bg-green-500' : 'bg-transparent'
+        } transition-all duration-200 z-10`}>
+          <div className="text-center">
+            <div className="text-lg mb-1">
+              {swipeDistance > 0 ? '👈' : '👉'}
+            </div>
+            <div>
+              {swipeDistance > 0 ? 'Mark Not Voted' : 'Mark Voted'}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="relative" style={{ opacity: isSwiping ? 0.3 : 1 }}>
+        <div className="flex items-start gap-4">
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={(e) => {
+              e.stopPropagation();
+              onToggleSelect(voter.id);
+            }}
+            className="mt-1 text-orange-600 focus:ring-orange-500 scale-125 flex-shrink-0"
+          />
+          
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-3 mb-2 flex-wrap">
+              <h3 className="font-bold text-gray-900 text-base truncate flex-1 min-w-[140px]">
+                {voter.name}
+              </h3>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {/* Voted Status */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleVoted(voter.id, voter.voted);
+                  }}
+                  className={`px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-2 border-2 transition-all duration-300 ${
+                    voter.voted 
+                      ? 'bg-green-100 text-green-800 border-green-300 shadow-sm' 
+                      : 'bg-gray-100 text-gray-600 border-gray-300'
+                  } active:scale-95`}
+                >
+                  {voter.voted ? <FiCheckCircle size={16} /> : <FiClock size={16} />}
+                  {voter.voted ? 'Voted' : 'Not Voted'}
+                </button>
+                
+                {/* Support Level */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onUpdateSupport(voter.id, 
+                      voter.supportLevel === 'supporter' ? 'neutral' : 
+                      voter.supportLevel === 'neutral' ? 'opposed' : 'supporter'
+                    );
+                  }}
+                  className={`px-3 py-2 rounded-xl text-sm font-semibold border-2 transition-all duration-300 ${getSupportLevelColor(voter.supportLevel)} active:scale-95`}
+                >
+                  {getSupportLevelIcon(voter.supportLevel)}
+                </button>
+              </div>
+            </div>
+            
+            <div className="space-y-2 text-gray-600 text-sm">
+              <div className="flex items-center gap-4 justify-between flex-wrap">
+                <span className="font-medium">ID: {voter.voterId}</span>
+                {voter.age && (
+                  <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded-lg text-xs font-medium">
+                    Age: {voter.age}
+                  </span>
+                )}
+              </div>
+              
+              <div className="flex items-center gap-4 flex-wrap">
+                {voter.phone ? (
+                  <div className="flex items-center gap-2 text-green-600 font-medium">
+                    <FiPhone size={14} />
+                    <span>{voter.phone}</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-gray-400">
+                    <FiPhoneOff size={14} />
+                    <span>No Phone</span>
+                  </div>
+                )}
+                
+                {voter.houseNumber && (
+                  <div className="flex items-center gap-2 text-purple-600">
+                    <FiHome size={14} />
+                    <span>House: {voter.houseNumber}</span>
+                  </div>
+                )}
+              </div>
+
+              {voter.lastContacted && (
+                <div className="flex items-center gap-2 text-gray-500 bg-gray-100 px-3 py-1 rounded-lg">
+                  <FiCalendar size={14} />
+                  <span className="text-xs font-medium">
+                    Contacted: {new Date(voter.lastContacted).toLocaleDateString()}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2 flex-shrink-0">
+            {voter.phone && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onMessage(voter.id);
+                }}
+                className="text-orange-600 hover:text-orange-700 p-2.5 bg-orange-100 rounded-xl transition-all active:scale-95 shadow-sm"
+                title="Send Message"
+              >
+                <FiMessageCircle size={16} />
+              </button>
+            )}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onEdit(voter);
+              }}
+              className="text-blue-600 hover:text-blue-700 p-2.5 bg-blue-100 rounded-xl transition-all active:scale-95 shadow-sm"
+              title="Edit Voter"
+            >
+              <FiEdit2 size={16} />
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
 
 const BoothManagement = () => {
   const [activeView, setActiveView] = useState('boothList');
@@ -132,79 +441,91 @@ const BoothListView = ({ onBoothSelect }) => {
 
   const loadData = useCallback(async () => {
     setRefreshing(true);
-    const votersRef = ref(db, 'voters');
-    const karyakartasRef = ref(db, 'karyakartas');
-    const boothsRef = ref(db, 'booths');
     
-    const unsubscribeVoters = onValue(votersRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const votersData = processVoterData(snapshot.val());
-        setVoters(votersData);
+    try {
+      await firebaseLoadBalancer.execute(async () => {
+        const votersRef = ref(db, 'voters');
+        const karyakartasRef = ref(db, 'karyakartas');
+        const boothsRef = ref(db, 'booths');
         
-        const boothsData = createBoothsFromVoters(votersData);
-        
-        const unsubscribeBooths = onValue(boothsRef, (boothSnapshot) => {
-          if (boothSnapshot.exists()) {
-            const boothAssignments = boothSnapshot.val();
+        const unsubscribeVoters = onValue(votersRef, (snapshot) => {
+          if (snapshot.exists()) {
+            const votersData = processVoterData(snapshot.val());
+            setVoters(votersData);
             
-            const updatedBooths = boothsData.map(booth => {
-              const assignment = boothAssignments[booth.id];
-              if (assignment) {
-                return {
-                  ...booth,
-                  assignedKaryakarta: assignment.assignedKaryakarta || '',
-                  karyakartaName: assignment.karyakartaName || '',
-                  karyakartaPhone: assignment.karyakartaPhone || '',
-                };
+            const boothsData = createBoothsFromVoters(votersData);
+            
+            const unsubscribeBooths = onValue(boothsRef, (boothSnapshot) => {
+              if (boothSnapshot.exists()) {
+                const boothAssignments = boothSnapshot.val();
+                
+                const updatedBooths = boothsData.map(booth => {
+                  const assignment = boothAssignments[booth.id];
+                  if (assignment) {
+                    return {
+                      ...booth,
+                      assignedKaryakarta: assignment.assignedKaryakarta || '',
+                      karyakartaName: assignment.karyakartaName || '',
+                      karyakartaPhone: assignment.karyakartaPhone || '',
+                    };
+                  }
+                  return booth;
+                });
+                
+                setBooths(updatedBooths);
+              } else {
+                setBooths(boothsData);
               }
-              return booth;
+              setLoading(false);
+              setRefreshing(false);
             });
-            
-            setBooths(updatedBooths);
+
+            return () => off(boothsRef, 'value', unsubscribeBooths);
           } else {
-            setBooths(boothsData);
+            setVoters([]);
+            setBooths([]);
+            setLoading(false);
+            setRefreshing(false);
           }
-          setLoading(false);
-          setRefreshing(false);
         });
 
-        return () => off(boothsRef, 'value', unsubscribeBooths);
-      } else {
-        setVoters([]);
-        setBooths([]);
-        setLoading(false);
-        setRefreshing(false);
-      }
-    });
+        const unsubscribeKaryakartas = onValue(karyakartasRef, (snapshot) => {
+          if (snapshot.exists()) {
+            const karyakartasData = Object.entries(snapshot.val()).map(([key, value]) => ({
+              id: key,
+              name: value.name || 'Unknown Karyakarta',
+              phone: value.phone || '',
+            }));
+            setKaryakartas(karyakartasData);
+          } else {
+            setKaryakartas([]);
+          }
+        });
 
-    const unsubscribeKaryakartas = onValue(karyakartasRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const karyakartasData = Object.entries(snapshot.val()).map(([key, value]) => ({
-          id: key,
-          name: value.name || 'Unknown Karyakarta',
-          phone: value.phone || '',
-        }));
-        setKaryakartas(karyakartasData);
-      } else {
-        setKaryakartas([]);
-      }
-    });
-
-    return () => {
-      off(votersRef, 'value', unsubscribeVoters);
-      off(karyakartasRef, 'value', unsubscribeKaryakartas);
-    };
+        return () => {
+          off(votersRef, 'value', unsubscribeVoters);
+          off(karyakartasRef, 'value', unsubscribeKaryakartas);
+        };
+      });
+    } catch (error) {
+      console.error('Error loading data:', error);
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, [processVoterData, createBoothsFromVoters]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
-  const filteredBooths = booths.filter(booth => 
-    !searchTerm.trim() ||
-    booth.pollingStationAddress.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    booth.village.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (booth.karyakartaName && booth.karyakartaName.toLowerCase().includes(searchTerm.toLowerCase()))
+  const filteredBooths = useMemo(() => 
+    booths.filter(booth => 
+      !searchTerm.trim() ||
+      booth.pollingStationAddress.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      booth.village.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (booth.karyakartaName && booth.karyakartaName.toLowerCase().includes(searchTerm.toLowerCase()))
+    ),
+    [booths, searchTerm]
   );
 
   const handleAssignKaryakarta = async () => {
@@ -214,52 +535,54 @@ const BoothListView = ({ onBoothSelect }) => {
     }
     
     try {
-      const karyakarta = karyakartas.find(k => k.id === selectedKaryakarta);
-      
-      if (!karyakarta) {
-        setMessage('Selected karyakarta not found');
-        return;
-      }
+      await firebaseLoadBalancer.execute(async () => {
+        const karyakarta = karyakartas.find(k => k.id === selectedKaryakarta);
+        
+        if (!karyakarta) {
+          setMessage('Selected karyakarta not found');
+          return;
+        }
 
-      const updates = {};
-      const boothId = currentBooth.id;
+        const updates = {};
+        const boothId = currentBooth.id;
 
-      updates[`booths/${boothId}`] = {
-        assignedKaryakarta: selectedKaryakarta,
-        karyakartaName: karyakarta.name,
-        karyakartaPhone: karyakarta.phone,
-        pollingStationAddress: currentBooth.pollingStationAddress,
-        village: currentBooth.village,
-        lastUpdated: new Date().toISOString()
-      };
+        updates[`booths/${boothId}`] = {
+          assignedKaryakarta: selectedKaryakarta,
+          karyakartaName: karyakarta.name,
+          karyakartaPhone: karyakarta.phone,
+          pollingStationAddress: currentBooth.pollingStationAddress,
+          village: currentBooth.village,
+          lastUpdated: new Date().toISOString()
+        };
 
-      const boothVoters = voters.filter(voter => 
-        createSafeId(voter.pollingStationAddress) === boothId
-      );
-      
-      boothVoters.forEach(voter => {
-        updates[`voters/${voter.id}/assignedKaryakarta`] = selectedKaryakarta;
+        const boothVoters = voters.filter(voter => 
+          createSafeId(voter.pollingStationAddress) === boothId
+        );
+        
+        boothVoters.forEach(voter => {
+          updates[`voters/${voter.id}/assignedKaryakarta`] = selectedKaryakarta;
+        });
+
+        await update(ref(db), updates);
+        
+        setBooths(prev => prev.map(booth => 
+          booth.id === boothId 
+            ? {
+                ...booth,
+                assignedKaryakarta: selectedKaryakarta,
+                karyakartaName: karyakarta.name,
+                karyakartaPhone: karyakarta.phone
+              }
+            : booth
+        ));
+
+        setShowKaryakartaModal(false);
+        setSelectedKaryakarta('');
+        setCurrentBooth(null);
+        setMessage(`✅ ${karyakarta.name} assigned successfully!`);
+        
+        setTimeout(() => setMessage(''), 3000);
       });
-
-      await update(ref(db), updates);
-      
-      setBooths(prev => prev.map(booth => 
-        booth.id === boothId 
-          ? {
-              ...booth,
-              assignedKaryakarta: selectedKaryakarta,
-              karyakartaName: karyakarta.name,
-              karyakartaPhone: karyakarta.phone
-            }
-          : booth
-      ));
-
-      setShowKaryakartaModal(false);
-      setSelectedKaryakarta('');
-      setCurrentBooth(null);
-      setMessage(`✅ ${karyakarta.name} assigned successfully!`);
-      
-      setTimeout(() => setMessage(''), 3000);
     } catch (error) {
       console.error('Error assigning karyakarta:', error);
       setMessage('❌ Error assigning karyakarta. Please try again.');
@@ -561,25 +884,6 @@ const BoothListView = ({ onBoothSelect }) => {
   );
 };
 
-// Add missing refresh icon
-const FiRefreshCw = ({ size = 16, className = "" }) => (
-  <svg 
-    stroke="currentColor" 
-    fill="none" 
-    strokeWidth="2" 
-    viewBox="0 0 24 24" 
-    strokeLinecap="round" 
-    strokeLinejoin="round" 
-    height={size} 
-    width={size} 
-    className={className}
-  >
-    <path d="M23 4v6h-6"></path>
-    <path d="M1 20v-6h6"></path>
-    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-  </svg>
-);
-
 const BoothDetailView = ({ booth, onBack }) => {
   const [voters, setVoters] = useState(booth.voters || []);
   const [searchTerm, setSearchTerm] = useState('');
@@ -592,103 +896,66 @@ const BoothDetailView = ({ booth, onBack }) => {
   const [editingVoter, setEditingVoter] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [bulkAction, setBulkAction] = useState('');
-  const [swipeAction, setSwipeAction] = useState(null);
-  const [touchStart, setTouchStart] = useState(null);
-  const [touchEnd, setTouchEnd] = useState(null);
   const [lastTap, setLastTap] = useState(0);
 
-  // Swipe gesture handling
-  const handleTouchStart = (e, voter) => {
-    setTouchStart(e.targetTouches[0].clientX);
-    setSwipeAction(voter);
-  };
+  // Memoized filtered voters for performance
+  const filteredVoters = useMemo(() => 
+    voters.filter(voter => {
+      if (searchTerm && !voter.name.toLowerCase().includes(searchTerm.toLowerCase()) && 
+          !voter.voterId.toLowerCase().includes(searchTerm.toLowerCase()) &&
+          !voter.phone.includes(searchTerm)) {
+        return false;
+      }
+      
+      switch (filter) {
+        case 'voted': return voter.voted;
+        case 'notVoted': return !voter.voted;
+        case 'withPhone': return voter.phone;
+        case 'withoutPhone': return !voter.phone;
+        case 'supporters': return voter.supportLevel === 'supporter';
+        case 'neutral': return voter.supportLevel === 'neutral';
+        case 'opposed': return voter.supportLevel === 'opposed';
+        default: return true;
+      }
+    }),
+    [voters, searchTerm, filter]
+  );
 
-  const handleTouchMove = (e, voter) => {
-    if (!touchStart) return;
-    setTouchEnd(e.targetTouches[0].clientX);
-  };
-
-  const handleTouchEnd = (voter) => {
-    if (!touchStart || !touchEnd) return;
-    
-    const distance = touchStart - touchEnd;
-    const isLeftSwipe = distance > 50;
-    const isRightSwipe = distance < -50;
-
-    if (isLeftSwipe) {
-      // Swipe left - mark as not voted
-      toggleVotedStatus(voter.id, voter.voted);
-    } else if (isRightSwipe) {
-      // Swipe right - mark as voted
-      toggleVotedStatus(voter.id, voter.voted);
-    }
-
-    setTouchStart(null);
-    setTouchEnd(null);
-    setSwipeAction(null);
-  };
-
-  // Double tap handling
-  const handleDoubleTap = (voter) => {
-    const now = Date.now();
-    if (lastTap && (now - lastTap) < 300) {
-      // Double tap detected
-      toggleVotedStatus(voter.id, voter.voted);
-      setLastTap(0);
-    } else {
-      setLastTap(now);
-    }
-  };
-
-  const filteredVoters = voters.filter(voter => {
-    if (searchTerm && !voter.name.toLowerCase().includes(searchTerm.toLowerCase()) && 
-        !voter.voterId.toLowerCase().includes(searchTerm.toLowerCase()) &&
-        !voter.phone.includes(searchTerm)) {
-      return false;
-    }
-    
-    switch (filter) {
-      case 'voted': return voter.voted;
-      case 'notVoted': return !voter.voted;
-      case 'withPhone': return voter.phone;
-      case 'withoutPhone': return !voter.phone;
-      case 'supporters': return voter.supportLevel === 'supporter';
-      case 'neutral': return voter.supportLevel === 'neutral';
-      case 'opposed': return voter.supportLevel === 'opposed';
-      default: return true;
-    }
-  });
-
-  const toggleVoterSelection = (voterId) => {
+  const toggleVoterSelection = useCallback((voterId) => {
     setSelectedVoters(prev => 
       prev.includes(voterId) 
         ? prev.filter(id => id !== voterId)
         : [...prev, voterId]
     );
-  };
+  }, []);
 
-  const selectAllVoters = () => {
+  const selectAllVoters = useCallback(() => {
     setSelectedVoters(selectedVoters.length === filteredVoters.length ? [] : filteredVoters.map(v => v.id));
-  };
+  }, [filteredVoters, selectedVoters.length]);
 
-  const toggleVotedStatus = async (voterId, currentStatus) => {
+  const toggleVotedStatus = useCallback(async (voterId, currentStatus) => {
     try {
-      await update(ref(db, `voters/${voterId}/voted`), !currentStatus);
+      await firebaseLoadBalancer.execute(async () => {
+        await update(ref(db, `voters/${voterId}/voted`), !currentStatus);
+      });
+      
       setVoters(prev => prev.map(voter => 
         voter.id === voterId ? { ...voter, voted: !currentStatus } : voter
       ));
     } catch (error) {
       console.error('Error updating voted status:', error);
     }
-  };
+  }, []);
 
-  const bulkUpdateVotedStatus = async (status) => {
+  const bulkUpdateVotedStatus = useCallback(async (status) => {
     try {
-      const updates = {};
-      selectedVoters.forEach(id => {
-        updates[`voters/${id}/voted`] = status;
+      await firebaseLoadBalancer.execute(async () => {
+        const updates = {};
+        selectedVoters.forEach(id => {
+          updates[`voters/${id}/voted`] = status;
+        });
+        await update(ref(db), updates);
       });
-      await update(ref(db), updates);
       
       setVoters(prev => prev.map(voter => 
         selectedVoters.includes(voter.id) ? { ...voter, voted: status } : voter
@@ -698,20 +965,23 @@ const BoothDetailView = ({ booth, onBack }) => {
     } catch (error) {
       console.error('Error bulk updating voted status:', error);
     }
-  };
+  }, [selectedVoters]);
 
-  const updateSupportLevel = async (voterId, level) => {
+  const updateSupportLevel = useCallback(async (voterId, level) => {
     try {
-      await update(ref(db, `voters/${voterId}/supportLevel`), level);
+      await firebaseLoadBalancer.execute(async () => {
+        await update(ref(db, `voters/${voterId}/supportLevel`), level);
+      });
+      
       setVoters(prev => prev.map(voter => 
         voter.id === voterId ? { ...voter, supportLevel: level } : voter
       ));
     } catch (error) {
       console.error('Error updating support level:', error);
     }
-  };
+  }, []);
 
-  const handleEditVoter = (voter) => {
+  const handleEditVoter = useCallback((voter) => {
     setEditingVoter(voter);
     setEditForm({
       name: voter.name || '',
@@ -721,17 +991,19 @@ const BoothDetailView = ({ booth, onBack }) => {
       age: voter.age || '',
       gender: voter.gender || ''
     });
-  };
+  }, []);
 
-  const saveVoterEdit = async () => {
+  const saveVoterEdit = useCallback(async () => {
     if (!editingVoter) return;
     
     try {
-      const updates = {};
-      Object.keys(editForm).forEach(key => {
-        updates[`voters/${editingVoter.id}/${key}`] = editForm[key];
+      await firebaseLoadBalancer.execute(async () => {
+        const updates = {};
+        Object.keys(editForm).forEach(key => {
+          updates[`voters/${editingVoter.id}/${key}`] = editForm[key];
+        });
+        await update(ref(db), updates);
       });
-      await update(ref(db), updates);
       
       setVoters(prev => prev.map(voter => 
         voter.id === editingVoter.id ? { ...voter, ...editForm } : voter
@@ -741,23 +1013,25 @@ const BoothDetailView = ({ booth, onBack }) => {
     } catch (error) {
       console.error('Error updating voter:', error);
     }
-  };
+  }, [editingVoter, editForm]);
 
-  const sendCampaignMessage = async () => {
+  const sendCampaignMessage = useCallback(async () => {
     if (!campaignMessage.trim()) return;
     
     try {
-      const updates = {};
-      const timestamp = new Date().toISOString();
-      selectedVoters.forEach(voterId => {
-        updates[`voters/${voterId}/lastContacted`] = timestamp;
-        updates[`voters/${voterId}/lastCampaign`] = campaignMessage;
+      await firebaseLoadBalancer.execute(async () => {
+        const updates = {};
+        const timestamp = new Date().toISOString();
+        selectedVoters.forEach(voterId => {
+          updates[`voters/${voterId}/lastContacted`] = timestamp;
+          updates[`voters/${voterId}/lastCampaign`] = campaignMessage;
+        });
+        await update(ref(db), updates);
       });
-      await update(ref(db), updates);
       
       setVoters(prev => prev.map(voter => 
         selectedVoters.includes(voter.id) 
-          ? { ...voter, lastContacted: timestamp }
+          ? { ...voter, lastContacted: new Date().toISOString() }
           : voter
       ));
       
@@ -767,19 +1041,21 @@ const BoothDetailView = ({ booth, onBack }) => {
     } catch (error) {
       console.error('Error sending campaign:', error);
     }
-  };
+  }, [campaignMessage, selectedVoters]);
 
-  const deleteBoothAndVoters = async () => {
+  const deleteBoothAndVoters = useCallback(async () => {
     try {
-      const updates = {};
-      
-      updates[`booths/${booth.id}`] = null;
-      
-      booth.voters.forEach(voter => {
-        updates[`voters/${voter.id}`] = null;
+      await firebaseLoadBalancer.execute(async () => {
+        const updates = {};
+        
+        updates[`booths/${booth.id}`] = null;
+        
+        booth.voters.forEach(voter => {
+          updates[`voters/${voter.id}`] = null;
+        });
+        
+        await update(ref(db), updates);
       });
-      
-      await update(ref(db), updates);
       
       alert('बूथ आणि त्यातील सर्व मतदार यशस्वीरित्या हटवले गेले!');
       onBack();
@@ -787,32 +1063,31 @@ const BoothDetailView = ({ booth, onBack }) => {
       console.error('Error deleting booth:', error);
       alert('बूथ हटवण्यात त्रुटी आली. कृपया पुन्हा प्रयत्न करा.');
     }
-  };
+  }, [booth, onBack]);
 
-  const stats = {
+  const handleDoubleTap = useCallback((voter) => {
+    const now = Date.now();
+    if (lastTap && (now - lastTap) < 300) {
+      toggleVotedStatus(voter.id, voter.voted);
+      setLastTap(0);
+    } else {
+      setLastTap(now);
+    }
+  }, [lastTap, toggleVotedStatus]);
+
+  const handleMessageVoter = useCallback((voterId) => {
+    setSelectedVoters([voterId]);
+    setShowCampaignModal(true);
+  }, []);
+
+  const stats = useMemo(() => ({
     total: voters.length,
     voted: voters.filter(v => v.voted).length,
     withPhone: voters.filter(v => v.phone).length,
     supporters: voters.filter(v => v.supportLevel === 'supporter').length,
     neutral: voters.filter(v => v.supportLevel === 'neutral').length,
     opposed: voters.filter(v => v.supportLevel === 'opposed').length,
-  };
-
-  const getSupportLevelColor = (level) => {
-    switch (level) {
-      case 'supporter': return 'text-green-600 bg-green-100 border-green-200';
-      case 'opposed': return 'text-red-600 bg-red-100 border-red-200';
-      default: return 'text-yellow-600 bg-yellow-100 border-yellow-200';
-    }
-  };
-
-  const getSupportLevelIcon = (level) => {
-    switch (level) {
-      case 'supporter': return '👍';
-      case 'opposed': return '👎';
-      default: return '😐';
-    }
-  };
+  }), [voters]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 pb-20">
@@ -953,7 +1228,7 @@ const BoothDetailView = ({ booth, onBack }) => {
 
       {/* Swipe Instructions */}
       <div className="px-4 py-3 bg-blue-50 border-b border-blue-200">
-        <div className="flex items-center justify-center gap-4 text-blue-700 text-sm font-medium">
+        <div className="flex items-center justify-center gap-4 text-blue-700 text-sm font-medium flex-wrap">
           <div className="flex items-center gap-2">
             <span className="bg-blue-100 p-1 rounded">👉</span>
             <span>Swipe right to mark voted</span>
@@ -978,150 +1253,19 @@ const BoothDetailView = ({ booth, onBack }) => {
             <p className="text-orange-400 text-sm mt-2">Try adjusting your search or filters</p>
           </div>
         ) : (
-          filteredVoters.map((voter) => {
-            const isSwiping = swipeAction?.id === voter.id;
-            const swipeDistance = touchStart && touchEnd ? touchStart - touchEnd : 0;
-            
-            return (
-              <div
-                key={voter.id}
-                className={`bg-white/90 backdrop-blur-sm rounded-2xl border p-4 transition-all duration-200 ${
-                  selectedVoters.includes(voter.id) 
-                    ? 'border-orange-500 bg-orange-50 shadow-lg transform scale-[1.02]' 
-                    : 'border-orange-200 hover:border-orange-300 hover:shadow-md'
-                } ${isSwiping ? 'transform-gpu' : ''}`}
-                style={{
-                  transform: isSwiping ? `translateX(${swipeDistance * 0.3}px)` : '',
-                  opacity: isSwiping ? 0.9 : 1
-                }}
-                onTouchStart={(e) => handleTouchStart(e, voter)}
-                onTouchMove={(e) => handleTouchMove(e, voter)}
-                onTouchEnd={() => handleTouchEnd(voter)}
-                onClick={() => handleDoubleTap(voter)}
-              >
-                {/* Swipe Action Indicator */}
-                {isSwiping && (
-                  <div className={`absolute inset-0 rounded-2xl flex items-center justify-center font-bold text-white text-lg ${
-                    swipeDistance > 50 ? 'bg-red-500' : swipeDistance < -50 ? 'bg-green-500' : 'bg-transparent'
-                  } transition-all duration-200`}>
-                    {swipeDistance > 50 ? 'Marking as Not Voted' : swipeDistance < -50 ? 'Marking as Voted' : ''}
-                  </div>
-                )}
-
-                <div className={`relative ${isSwiping ? 'opacity-70' : 'opacity-100'}`}>
-                  <div className="flex items-start gap-4">
-                    <input
-                      type="checkbox"
-                      checked={selectedVoters.includes(voter.id)}
-                      onChange={() => toggleVoterSelection(voter.id)}
-                      onClick={(e) => e.stopPropagation()}
-                      className="mt-1 text-orange-600 focus:ring-orange-500 scale-125 flex-shrink-0"
-                    />
-                    
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-3 mb-2 flex-wrap">
-                        <h3 className="font-bold text-gray-900 text-base truncate flex-1 min-w-[140px]">
-                          {voter.name}
-                        </h3>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          {/* Voted Status with Animation */}
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleVotedStatus(voter.id, voter.voted);
-                            }}
-                            className={`px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-2 border-2 transition-all duration-300 ${
-                              voter.voted 
-                                ? 'bg-green-100 text-green-800 border-green-300 shadow-sm' 
-                                : 'bg-gray-100 text-gray-600 border-gray-300'
-                            } active:scale-95`}
-                          >
-                            {voter.voted ? <FiCheckCircle size={16} /> : <FiClock size={16} />}
-                            {voter.voted ? 'Voted' : 'Not Voted'}
-                          </button>
-                          
-                          {/* Support Level Button */}
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              updateSupportLevel(voter.id, 
-                                voter.supportLevel === 'supporter' ? 'neutral' : 
-                                voter.supportLevel === 'neutral' ? 'opposed' : 'supporter'
-                              );
-                            }}
-                            className={`px-3 py-2 rounded-xl text-sm font-semibold border-2 transition-all duration-300 ${getSupportLevelColor(voter.supportLevel)} active:scale-95`}
-                          >
-                            {getSupportLevelIcon(voter.supportLevel)}
-                          </button>
-                        </div>
-                      </div>
-                      
-                      <div className="space-y-2 text-gray-600 text-sm">
-                        <div className="flex items-center gap-4 justify-between flex-wrap">
-                          <span className="font-medium">ID: {voter.voterId}</span>
-                          {voter.age && <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded-lg text-xs font-medium">Age: {voter.age}</span>}
-                        </div>
-                        
-                        <div className="flex items-center gap-4 flex-wrap">
-                          {voter.phone ? (
-                            <div className="flex items-center gap-2 text-green-600 font-medium">
-                              <FiPhone size={14} />
-                              <span>{voter.phone}</span>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-2 text-gray-400">
-                              <FiPhoneOff size={14} />
-                              <span>No Phone</span>
-                            </div>
-                          )}
-                          
-                          {voter.houseNumber && (
-                            <div className="flex items-center gap-2 text-purple-600">
-                              <FiHome size={14} />
-                              <span>House: {voter.houseNumber}</span>
-                            </div>
-                          )}
-                        </div>
-
-                        {voter.lastContacted && (
-                          <div className="flex items-center gap-2 text-gray-500 bg-gray-100 px-3 py-1 rounded-lg">
-                            <FiCalendar size={14} />
-                            <span className="text-xs font-medium">Contacted: {new Date(voter.lastContacted).toLocaleDateString()}</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col gap-2 flex-shrink-0">
-                      {voter.phone && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedVoters([voter.id]);
-                            setShowCampaignModal(true);
-                          }}
-                          className="text-orange-600 hover:text-orange-700 p-2.5 bg-orange-100 rounded-xl transition-all active:scale-95 shadow-sm"
-                          title="Send Message"
-                        >
-                          <FiMessageCircle size={16} />
-                        </button>
-                      )}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleEditVoter(voter);
-                        }}
-                        className="text-blue-600 hover:text-blue-700 p-2.5 bg-blue-100 rounded-xl transition-all active:scale-95 shadow-sm"
-                        title="Edit Voter"
-                      >
-                        <FiEdit2 size={16} />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            );
-          })
+          filteredVoters.map((voter) => (
+            <VoterItem
+              key={voter.id}
+              voter={voter}
+              isSelected={selectedVoters.includes(voter.id)}
+              onToggleSelect={toggleVoterSelection}
+              onToggleVoted={toggleVotedStatus}
+              onUpdateSupport={updateSupportLevel}
+              onEdit={handleEditVoter}
+              onMessage={handleMessageVoter}
+              onDoubleTap={handleDoubleTap}
+            />
+          ))
         )}
       </div>
 
@@ -1359,6 +1503,19 @@ const styles = `
 
 .transform-gpu {
   transform: translateZ(0);
+}
+
+/* Smooth transitions for swipe */
+.voter-item {
+  transition: transform 0.2s ease-out, opacity 0.2s ease-out;
+}
+
+/* Prevent text selection during swipe */
+.voter-item * {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
 }
 `;
 
