@@ -175,32 +175,44 @@ const VoterItem = React.memo(({
 const BoothManagement = () => {
   const [activeView, setActiveView] = useState('boothList');
   const [selectedBooth, setSelectedBooth] = useState(null);
+  const [loadingBoothDetail, setLoadingBoothDetail] = useState(false);
   
+  const handleBoothSelect = useCallback(async (booth) => {
+    setLoadingBoothDetail(true);
+    setSelectedBooth(booth);
+    
+    // Small delay to show loading state
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    setActiveView('boothDetail');
+    setLoadingBoothDetail(false);
+  }, []);
+
+  const handleBack = useCallback(() => {
+    setSelectedBooth(null);
+    setActiveView('boothList');
+  }, []);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50">
       {activeView === 'boothList' && (
         <BoothListView 
-          onBoothSelect={(booth) => {
-            setSelectedBooth(booth);
-            setActiveView('boothDetail');
-          }}
+          onBoothSelect={handleBoothSelect}
+          loadingBoothDetail={loadingBoothDetail}
         />
       )}
       
       {activeView === 'boothDetail' && selectedBooth && (
         <BoothDetailView 
           booth={selectedBooth}
-          onBack={() => {
-            setSelectedBooth(null);
-            setActiveView('boothList');
-          }}
+          onBack={handleBack}
         />
       )}
     </div>
   );
 };
 
-const BoothListView = ({ onBoothSelect }) => {
+const BoothListView = ({ onBoothSelect, loadingBoothDetail }) => {
   const [booths, setBooths] = useState([]);
   const [voters, setVoters] = useState([]);
   const [karyakartas, setKaryakartas] = useState([]);
@@ -521,6 +533,17 @@ const BoothListView = ({ onBoothSelect }) => {
         </button>
       </div>
 
+      {/* Loading Overlay for Booth Detail */}
+      {loadingBoothDetail && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-white rounded-3xl p-8 shadow-2xl text-center">
+            <div className="animate-spin rounded-full h-16 w-16 border-4 border-orange-200 border-t-orange-600 mx-auto mb-4"></div>
+            <h3 className="text-xl font-bold text-gray-900 mb-2">Loading Voters</h3>
+            <p className="text-gray-600">Please wait while we load the voter data...</p>
+          </div>
+        </div>
+      )}
+
       {/* Booths List */}
       <div className="p-6 space-y-4">
         {filteredBooths.length === 0 ? (
@@ -626,10 +649,24 @@ const BoothListView = ({ onBoothSelect }) => {
 
               <button
                 onClick={() => onBoothSelect(booth)}
-                className="w-full bg-gradient-to-r from-orange-500 to-amber-500 text-white py-4 rounded-2xl font-bold hover:from-orange-600 hover:to-amber-600 transition-all active:scale-95 flex items-center justify-center gap-3 shadow-lg"
+                disabled={loadingBoothDetail}
+                className={`w-full py-4 rounded-2xl font-bold transition-all active:scale-95 flex items-center justify-center gap-3 shadow-lg ${
+                  loadingBoothDetail
+                    ? 'bg-gray-400 text-white cursor-not-allowed'
+                    : 'bg-gradient-to-r from-orange-500 to-amber-500 text-white hover:from-orange-600 hover:to-amber-600'
+                }`}
               >
-                <FiUsers size={18} />
-                View Voters
+                {loadingBoothDetail ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
+                    <span>Loading...</span>
+                  </>
+                ) : (
+                  <>
+                    <FiUsers size={18} />
+                    <span>View Voters</span>
+                  </>
+                )}
               </button>
             </div>
           ))
@@ -699,6 +736,16 @@ const BoothDetailView = ({ booth, onBack }) => {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [editingVoter, setEditingVoter] = useState(null);
   const [editForm, setEditForm] = useState({});
+  const [loadingVoters, setLoadingVoters] = useState(true);
+
+  // Simulate loading when component mounts
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setLoadingVoters(false);
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, []);
 
   // Toggle voted status - FIXED VERSION
   const toggleVotedStatus = useCallback(async (voterId, currentStatus) => {
@@ -902,23 +949,31 @@ const BoothDetailView = ({ booth, onBack }) => {
         </div>
       </div>
 
-      {/* Voters List */}
-      <div className="p-6 space-y-4">
-        {filteredVoters.length === 0 ? (
+      {/* Voters List with Loading State */}
+      <div className="p-6">
+        {loadingVoters ? (
+          <div className="text-center py-16 bg-white/80 rounded-3xl shadow border border-orange-200">
+            <div className="animate-spin rounded-full h-16 w-16 border-4 border-orange-200 border-t-orange-600 mx-auto mb-4"></div>
+            <h3 className="text-orange-600 text-lg font-medium mb-2">Loading Voters</h3>
+            <p className="text-orange-400">Please wait while we load the voter data...</p>
+          </div>
+        ) : filteredVoters.length === 0 ? (
           <div className="text-center py-16 bg-white/80 rounded-3xl shadow border border-orange-200">
             <FiUsers className="inline text-orange-300 text-5xl mb-4" />
             <p className="text-orange-600 text-lg font-medium">No voters found</p>
             <p className="text-orange-400 mt-2">Try adjusting your search or filters</p>
           </div>
         ) : (
-          filteredVoters.map((voter) => (
-            <VoterItem
-              key={voter.id}
-              voter={voter}
-              onToggleVoted={toggleVotedStatus}
-              onEdit={handleEditVoter}
-            />
-          ))
+          <div className="space-y-4">
+            {filteredVoters.map((voter) => (
+              <VoterItem
+                key={voter.id}
+                voter={voter}
+                onToggleVoted={toggleVotedStatus}
+                onEdit={handleEditVoter}
+              />
+            ))}
+          </div>
         )}
       </div>
 
